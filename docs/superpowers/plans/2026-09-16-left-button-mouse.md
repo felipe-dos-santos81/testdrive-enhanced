@@ -275,7 +275,24 @@ static void draw_steer_buttons(u32 *px, int k)
 }
 ```
 
-`out_arrow` points left for `dir = +1` and right for `dir = -1` (as shipped). The two gear arrows reuse it rotated by placing them above and below the cell centre; if that reads poorly in the windowed check, mirror them vertically with a `dir` parameter extension — the manual pass in Task 6 decides.
+`out_arrow` points left for `dir = +1` and right for `dir = -1` (as shipped). The gear cells need a
+vertical arrow, so add one helper in the same style rather than distorting `out_arrow`:
+
+```c
+/* Filled triangle pointing up (dir +1) or down (dir -1). */
+static void out_arrow_v(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
+{
+    int ow = 320 * k;
+    for (int i = 0; i < len * k; i++)
+        for (int j = -i; j <= i; j++) {
+            int x = cx * k + j, y = cy * k - dir * i;
+            if (x >= 0 && x < ow && y >= 0 && y < 200 * k) px[(size_t)y * ow + x] = c;
+        }
+}
+```
+
+and use `out_arrow_v(..., -1, ...)` for `▲` and `out_arrow_v(..., +1, ...)` for `▼` at the cell
+centre. No judgement call is left: the windowed pass in Task 6 only confirms legibility.
 
 Also update `ov_dirty()`: its hover comparison uses `steer_button_at` today; use `drive_cell_at`.
 
@@ -483,8 +500,8 @@ static u16 mouse_menu(void)
         default:              return 0x000D;             /* Enter */
         }
     }
-    u16 dir = mouse_direction(0, mouse_poll().off_y <= -MOUSE_OFF_THRESH,
-                                 mouse_poll().off_y >=  MOUSE_OFF_THRESH);
+    MouseState s = mouse_poll();                         /* one poll per call: it consumes the deltas */
+    u16 dir = mouse_direction(0, s.off_y <= -MOUSE_OFF_THRESH, s.off_y >= MOUSE_OFF_THRESH);
     u16 r = DSW((u16)(DS_joy_menu_scan + (u16)mouse_joy_nibble(dir) * 2));
     if (r == DSW(DS_joy_menu_last)) return 0;
     DSW(DS_joy_menu_last) = r;
@@ -492,7 +509,9 @@ static u16 mouse_menu(void)
 }
 ```
 
-Keep the vertical-flick selection exactly as it works today, including the `DS_joy_menu_last` dedupe: if the two `mouse_poll()` calls above read as awkward, store `MouseState s = mouse_poll();` once and build `dir` from `s.off_y`.
+The vertical-flick selection keeps today's behaviour exactly, including the `DS_joy_menu_last`
+dedupe. Poll once, as above — calling `mouse_poll()` twice would decay the offsets twice and
+consume the motion deltas in the wrong place.
 
 - [ ] **Step 2: Delete the right-click Esc branch and `mouse_meta` if unused**
 
