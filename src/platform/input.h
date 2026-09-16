@@ -60,21 +60,62 @@ static inline u8 mouse_joy_nibble(u16 dir)
     }
 }
 
-/* On-screen steering buttons, drawn over the dashboard of the driving view (below the road window
- * rows 19..111) by the enhanced renderer, hit-tested here. EGA 320x200 coordinates; the renderer
- * scales them by the output scale. Single source of truth so drawing and hit-testing cannot drift. */
-#define STEER_BTN_Y0   176
-#define STEER_BTN_Y1   196
-#define STEER_BTN_LX0    8
-#define STEER_BTN_LX1   56
-#define STEER_BTN_RX0  264
-#define STEER_BTN_RX1  312
+/* Left-button gestures (spec 2026-09-16-left-button-mouse-design.md). Pure predicates so the
+ * scratch harness can exercise the boundaries. */
+#define MOUSE_HOLD_MS    180
+#define MOUSE_DOUBLE_MS  300
+#define FIRE_PULSE_POLLS   3
 
-/* -1 left button, +1 right button, 0 none. */
-static inline int steer_button_at(s16 ex, s16 ey)
+static inline bool mouse_is_hold(uint64_t press_ns, uint64_t now_ns)
+{ return now_ns - press_ns >= (uint64_t)MOUSE_HOLD_MS * 1000000u; }
+
+static inline bool mouse_is_tap(uint64_t press_ns, uint64_t release_ns)
+{ return release_ns - press_ns < (uint64_t)MOUSE_HOLD_MS * 1000000u; }
+
+static inline bool mouse_is_double(uint64_t press_ns, uint64_t prev_tap_ns)
+{ return prev_tap_ns != 0 && press_ns >= prev_tap_ns &&
+         press_ns - prev_tap_ns <= (uint64_t)MOUSE_DOUBLE_MS * 1000000u; }
+
+/* Driving strip over the dashboard, EGA 320x200. Cells are half-open [x0, x1). */
+enum { CELL_NONE = 0, CELL_STEER_L, CELL_STEER_R, CELL_GEAR_UP, CELL_GEAR_DOWN, CELL_BRAKE, CELL_SOUND };
+#define DRIVE_CELL_COUNT 6
+#define STRIP_Y0 176
+#define STRIP_Y1 196
+
+static inline bool drive_cell_x(int cell, s16 *x0, s16 *x1)
 {
-    if (ey < STEER_BTN_Y0 || ey >= STEER_BTN_Y1) return 0;
-    if (ex >= STEER_BTN_LX0 && ex < STEER_BTN_LX1) return -1;
-    if (ex >= STEER_BTN_RX0 && ex < STEER_BTN_RX1) return 1;
-    return 0;
+    switch (cell) {
+    case CELL_STEER_L:   *x0 =   8; *x1 =  38; return true;
+    case CELL_STEER_R:   *x0 =  40; *x1 =  70; return true;
+    case CELL_GEAR_UP:   *x0 = 128; *x1 = 158; return true;
+    case CELL_GEAR_DOWN: *x0 = 160; *x1 = 190; return true;
+    case CELL_BRAKE:     *x0 = 232; *x1 = 284; return true;
+    case CELL_SOUND:     *x0 = 290; *x1 = 312; return true;
+    default: return false;
+    }
+}
+
+static inline int drive_cell_nth(int i) { return CELL_STEER_L + i; }
+
+static inline int drive_cell_at(s16 ex, s16 ey)
+{
+    if (ey < STRIP_Y0 || ey >= STRIP_Y1) return CELL_NONE;
+    for (int i = 0; i < DRIVE_CELL_COUNT; i++) {
+        s16 x0, x1;
+        drive_cell_x(drive_cell_nth(i), &x0, &x1);
+        if (ex >= x0 && ex < x1) return drive_cell_nth(i);
+    }
+    return CELL_NONE;
+}
+
+/* Menu screens carry ♪ and BACK at the right end of the same strip zone; menus and the driving
+ * strip never share a screen, so the ranges may coincide. */
+enum { MENU_CELL_NONE = 0, MENU_CELL_SOUND, MENU_CELL_BACK };
+
+static inline int menu_cell_at(s16 ex, s16 ey)
+{
+    if (ey < 176 || ey >= 192) return MENU_CELL_NONE;
+    if (ex >= 290 && ex < 312) return MENU_CELL_SOUND;
+    if (ex >= 232 && ex < 284) return MENU_CELL_BACK;
+    return MENU_CELL_NONE;
 }

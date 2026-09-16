@@ -1177,19 +1177,34 @@ static void out_arrow(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
         }
 }
 
+/* Filled triangle: dir -1 points up, +1 points down. */
+static void out_arrow_v(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
+{
+    int ow = 320 * k;
+    for (int i = 0; i < len * k; i++)
+        for (int j = -i; j <= i; j++) {
+            int x = cx * k + j, y = cy * k - dir * i;
+            if (x >= 0 && x < ow && y >= 0 && y < 200 * k) px[(size_t)y * ow + x] = c;
+        }
+}
+
 static void draw_steer_buttons(u32 *px, int k)
 {
     s16 ex, ey;
-    int hov = host_mouse_pos(&ex, &ey) ? steer_button_at(ex, ey) : 0;
+    int hover = host_mouse_pos(&ex, &ey) ? drive_cell_at(ex, ey) : CELL_NONE;
     bool pressed = (host_mouse_buttons() & 0x01) != 0;
-    u32 edge = gfx_palette_rgb(15);
-    u32 fill_l = (hov == -1 && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
-    u32 fill_r = (hov ==  1 && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
-    int cy = (STEER_BTN_Y0 + STEER_BTN_Y1) / 2;
-    out_rect(px, k, STEER_BTN_LX0, STEER_BTN_Y0, STEER_BTN_LX1, STEER_BTN_Y1, edge, fill_l);
-    out_rect(px, k, STEER_BTN_RX0, STEER_BTN_Y0, STEER_BTN_RX1, STEER_BTN_Y1, edge, fill_r);
-    out_arrow(px, k, (STEER_BTN_LX0 + STEER_BTN_LX1) / 2, cy, 4,  1, edge);
-    out_arrow(px, k, (STEER_BTN_RX0 + STEER_BTN_RX1) / 2, cy, 4, -1, edge);
+    for (int i = 0; i < DRIVE_CELL_COUNT; i++) {
+        int cell = drive_cell_nth(i);
+        s16 x0, x1;
+        if (!drive_cell_x(cell, &x0, &x1)) continue;
+        u32 edge = gfx_palette_rgb(15);
+        u32 fill = (cell == hover && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
+        out_rect(px, k, x0, STRIP_Y0, x1, STRIP_Y1, edge, fill);
+        if (cell == CELL_STEER_L) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4,  1, edge);
+        if (cell == CELL_STEER_R) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4, -1, edge);
+        if (cell == CELL_GEAR_UP)   out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3, -1, edge);
+        if (cell == CELL_GEAR_DOWN) out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3,  1, edge);
+    }
 }
 
 static bool ov_dirty(void)
@@ -1198,7 +1213,7 @@ static bool ov_dirty(void)
     dirty = false;
     if (active) {                                           /* refresh the button highlight live */
         s16 ex, ey;
-        int h = host_mouse_pos(&ex, &ey) ? steer_button_at(ex, ey) : 0;
+        int h = host_mouse_pos(&ex, &ey) ? drive_cell_at(ex, ey) : CELL_NONE;
         bool pressed = (host_mouse_buttons() & 0x01) != 0;
         if (h != last_btn_hover || pressed != last_btn_pressed) {
             last_btn_hover = h;

@@ -132,8 +132,9 @@ static u16 mouse_drive(void)
      * accelerate + turn); otherwise the relative motion offset steers, as before. */
     s16 steer = s.off;
     if (s.held & 0x01) {
-        int b = steer_button_at(s.x, s.y);
-        if (b != 0) steer = (s16)(b < 0 ? -MOUSE_OFF_THRESH : MOUSE_OFF_THRESH);
+        int b = drive_cell_at(s.x, s.y);
+        if (b == CELL_STEER_L) steer = (s16)-MOUSE_OFF_THRESH;
+        else if (b == CELL_STEER_R) steer = (s16)MOUSE_OFF_THRESH;
     }
     u16 dir = mouse_direction(steer, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
     /* PORT: X2 (host held bit 0x10) is the driving word's fire bit 0x10 — same value, different
