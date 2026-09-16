@@ -194,17 +194,32 @@ static u16 getkey_kbd_joy_edge(u16 *dx)
     return r;
 }
 
-/* 0x67E8 getkey dispatch through CS:67F2[input_mode] */
+/* PORT: mouse menu action — left click Enter, right click Esc, a flick past the steer threshold
+ * moves the selection through the same table the joystick edge path uses, deduped the same way. */
+static u16 mouse_menu(void)
+{
+    u16 pending = 0;
+    mouse_meta(true, &pending);
+    if (pending != 0) return pending;
+    u16 dir = mouse_direction(mouse_poll().off, false, false);
+    u16 r = DSW((u16)(DS_joy_menu_scan + (u16)mouse_joy_nibble(dir) * 2));
+    if (r == DSW(DS_joy_menu_last)) return 0;
+    DSW(DS_joy_menu_last) = r;
+    return r;
+}
+
+/* 0x67E8 getkey dispatch through CS:67F2[input_mode], with the mouse consulted when it yields nothing. */
 static u16 getkey_dx(u16 *dx)
 {
     switch (DSW(DS_input_mode)) {
     case 0: return getkey_kbd();
-    case 2: return getkey_kbd_joy_level(dx);
-    case 4: return getkey_kbd_joy_edge(dx);
+    case 2: { u16 k = getkey_kbd_joy_level(dx); if (k != 0) return k; break; }
+    case 4: { u16 k = getkey_kbd_joy_edge(dx);   if (k != 0) return k; break; }
     default:
         /* PORT: other modes jump through code bytes in the original; treat as "no key". */
-        return 0;
+        break;
     }
+    return mouse_menu();
 }
 
 u16 getkey(void)
