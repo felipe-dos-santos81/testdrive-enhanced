@@ -494,6 +494,7 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
     buf[len] = 0;
 
     s16 pos = 0;
+    int last_hover = -2;                                  /* PORT: last drawn hover cell (live highlight) */
     mouse_ui_capture = true;                              /* PORT: grid owns the queued clicks */
     gfx_clear_screen(0);
     osk_draw(buf, -1);
@@ -548,14 +549,20 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
                 }
             }
         }
+        s16 hx, hy;
+        int hover = host_mouse_pos(&hx, &hy) ? osk_hit(hx, hy) : -1;
+        if (hover != last_hover) {                          /* PORT: redraw on motion, restart idle timeout */
+            last_hover = hover;
+            set_deadline(timeout);
+            acted = true;
+        }
         if (!acted) {
             if (ticks_elapsed(DSW(DS_deadline_start)) >= DSW(DS_deadline_len)) break;
             host_pump();
             continue;
         }
         gfx_clear_screen(0);
-        s16 hx, hy;
-        osk_draw(buf, host_mouse_pos(&hx, &hy) ? osk_hit(hx, hy) : -1);
+        osk_draw(buf, hover);
         host_present_now();
     }
 done:
