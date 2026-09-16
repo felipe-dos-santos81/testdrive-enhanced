@@ -37,7 +37,7 @@ static s16 mouse_wheel;
 static u8 mouse_held;
 static s16 mouse_pos_x, mouse_pos_y;
 #define MOUSE_CLICK_MAX 8
-static struct { s16 x, y; u8 button; } mouse_clicks[MOUSE_CLICK_MAX];
+static struct { s16 x, y; u8 button; uint64_t ns; } mouse_clicks[MOUSE_CLICK_MAX];
 static int mouse_click_head, mouse_click_tail;
 
 /* Speaker state and square-wave generator. */
@@ -489,6 +489,7 @@ static void process_events(void)
                         mouse_clicks[mouse_click_tail].x = mouse_pos_x;
                         mouse_clicks[mouse_click_tail].y = mouse_pos_y;
                         mouse_clicks[mouse_click_tail].button = bit;
+                        mouse_clicks[mouse_click_tail].ns = ev.button.timestamp ? ev.button.timestamp : SDL_GetTicksNS();
                         mouse_click_tail = next;
                     }
                 } else {
@@ -555,13 +556,14 @@ u8 host_mouse_buttons(void)
     return mouse_held;
 }
 
-bool host_mouse_click(s16 *ex, s16 *ey, u8 *button)
+bool host_mouse_click(s16 *ex, s16 *ey, u8 *button, uint64_t *ns)
 {
     process_events();
     if (mouse_click_head == mouse_click_tail) return false;
     if (ex) *ex = mouse_clicks[mouse_click_head].x;
     if (ey) *ey = mouse_clicks[mouse_click_head].y;
     if (button) *button = mouse_clicks[mouse_click_head].button;
+    if (ns) *ns = mouse_clicks[mouse_click_head].ns;
     mouse_click_head = (mouse_click_head + 1) % MOUSE_CLICK_MAX;
     return true;
 }

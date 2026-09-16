@@ -98,7 +98,7 @@ static void mouse_meta(bool menus, u16 *pending)
 {
     s16 ex, ey;
     u8 btn;
-    while (host_mouse_click(&ex, &ey, &btn)) {
+    while (host_mouse_click(&ex, &ey, &btn, NULL)) {
         if ((btn & 0x04) && DSB(DS_modal_pause) == 0) {      /* middle: pause */
             u16 dx = 0;
             DSB(DS_modal_pause) = 1;
@@ -543,7 +543,7 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
         } else {
             s16 ex, ey;
             u8 btn;
-            while (host_mouse_click(&ex, &ey, &btn)) {
+            while (host_mouse_click(&ex, &ey, &btn, NULL)) {
                 acted = true;
                 if (btn & 0x02) { buf[0] = 0; goto done; } /* right click: clear and commit */
                 int cell = osk_hit(ex, ey);
@@ -588,7 +588,7 @@ done:
     {   /* PORT: drain, so no queued click outlives the editor (scores_show's menu_key would eat it) */
         s16 ex, ey;
         u8 b;
-        while (host_mouse_click(&ex, &ey, &b)) { }
+        while (host_mouse_click(&ex, &ey, &b, NULL)) { }
     }
     buf[len] = 0;
     /* TODO(verify): the original returns whatever AX draw_glyph left; the only caller ignores it. */

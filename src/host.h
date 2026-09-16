@@ -62,9 +62,10 @@ bool host_joy_read(s16 *x, s16 *y, u8 *buttons);
  * number of steps (+1 up, -1 down) since the last read. */
 void host_mouse_read(s16 *dx, s16 *dy, u8 *held, s16 *wheel);
 
-/* Current pointer and one queued press, both in EGA 320x200 screen coordinates. */
+/* Current pointer and one queued press, both in EGA 320x200 screen coordinates. ns receives the
+ * press event's timestamp in nanoseconds (SDL's own clock), for tap/hold/double timing. */
 bool host_mouse_pos(s16 *ex, s16 *ey);
-bool host_mouse_click(s16 *ex, s16 *ey, u8 *button);
+bool host_mouse_click(s16 *ex, s16 *ey, u8 *button, uint64_t *ns);
 
 /* Held buttons only, side-effect-free (does not consume motion or wheel), so a renderer can
  * highlight an on-screen control without stealing input from host_mouse_read. */
