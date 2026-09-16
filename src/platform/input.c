@@ -61,10 +61,12 @@ static u16 getkey_wait_dx(u16 *dx);
 
 /* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-mouse-control-design.md). Steering is
  * relative with auto-centre; throttle comes from the held buttons; the wheel pulses fire + a
- * direction to shift one gear. Buttons held: bit0 left, bit1 right, bit2 middle, bit3 X1. */
-typedef struct { s16 off; u8 held; s16 wheel; } MouseState;
+ * direction to shift one gear; vertical motion flicks the menus. Buttons held: bit0 left, bit1
+ * right, bit2 middle, bit3 X1, bit4 X2. */
+typedef struct { s16 off; s16 off_y; u8 held; s16 wheel; } MouseState;
 
 static s16 mouse_off;
+static s16 mouse_off_y;
 static uint64_t mouse_off_ns;
 static s16 mouse_gear_dir;
 static u8 mouse_gear_polls;
@@ -75,15 +77,16 @@ static bool mouse_ui_capture;
 
 static MouseState mouse_poll(void)
 {
-    s16 dx; u8 held; s16 wheel;
-    host_mouse_read(&dx, &held, &wheel);
+    s16 dx, dy; u8 held; s16 wheel;
+    host_mouse_read(&dx, &dy, &held, &wheel);
     uint64_t now = host_time_ns();
     if (mouse_off_ns == 0) mouse_off_ns = now;
     u32 dt = (u32)((now - mouse_off_ns) / 1000000u);
     mouse_off_ns = now;
     if (dt > 250u) dt = 250u;                               /* cap after a stall */
     mouse_off = mouse_steer_step(mouse_off, dx, dt);
-    MouseState s = { mouse_off, held, wheel };
+    mouse_off_y = mouse_steer_step(mouse_off_y, dy, dt);
+    MouseState s = { mouse_off, mouse_off_y, held, wheel };
     return s;
 }
 
@@ -124,7 +127,11 @@ static u16 mouse_drive(void)
         mouse_gear_polls--;
         return (u16)((mouse_gear_dir > 0 ? 1u : 5u) | 0x10u);
     }
-    return mouse_direction(s.off, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
+    u16 dir = mouse_direction(s.off, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
+    /* PORT: X2 (host held bit 0x10) is the driving word's fire bit 0x10 — same value, different
+     * namespace. It is the only fire a mouse-only player has for the wait screens and GAME OVER. */
+    if (s.held & 0x10) dir |= 0x10u;
+    return dir;
 }
 
 static u16 getkey_kbd_ctrl(u16 *dx)
@@ -198,15 +205,17 @@ static u16 getkey_kbd_joy_edge(u16 *dx)
     return r;
 }
 
-/* PORT: mouse menu action — left click Enter, right click Esc, a flick past the steer threshold
- * moves the selection through the same table the joystick edge path uses, deduped the same way. */
+/* PORT: mouse menu action — left click Enter, right click Esc, a vertical flick past the steer
+ * threshold moves the selection through the same table the joystick edge path uses (the menus only
+ * take Up/Down), deduped the same way. */
 static u16 mouse_menu(void)
 {
     if (mouse_ui_capture) return 0;                         /* PORT: on-screen keyboard owns clicks */
     u16 pending = 0;
     mouse_meta(true, &pending);
     if (pending != 0) return pending;
-    u16 dir = mouse_direction(mouse_poll().off, false, false);
+    MouseState s = mouse_poll();
+    u16 dir = mouse_direction(0, s.off_y <= -MOUSE_OFF_THRESH, s.off_y >= MOUSE_OFF_THRESH);
     u16 r = DSW((u16)(DS_joy_menu_scan + (u16)mouse_joy_nibble(dir) * 2));
     if (r == DSW(DS_joy_menu_last)) return 0;
     DSW(DS_joy_menu_last) = r;
@@ -442,10 +451,11 @@ int toupper_c(int c)
     return ch;
 }
 
-/* 0x92A8 text_input_line — high-score name editor, PORT: mouse-capable on-screen keyboard. The
- * original's key semantics are kept (Right/Left/Ins/Del/Backspace/letters/Enter and the idle
- * timeout); a clickable grid is added. Right click clears and commits (an empty name is not
- * recorded, see scores_enter_name). */
+/* 0x92A8 text_input_line — high-score name editor, PORT: mouse-capable on-screen keyboard. Keys kept
+ * from the original: Enter 0x0D, Left 0x4B00, Right 0x4D00, Backspace 0x08, Del 0x5300, printable
+ * 0x20..0x7A and the idle timeout. Insert/overwrite mode is dropped: the faithful editor body is not
+ * ported. A clickable grid is added; right click clears and commits (an empty name is not recorded,
+ * see scores_enter_name). */
 enum { OSK_COLS = 7, OSK_ROWS = 5, OSK_CELLS = 31,
        OSK_X0 = 20, OSK_Y0 = 60, OSK_CW = 40, OSK_CH = 24 };
 
@@ -567,6 +577,11 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
     }
 done:
     mouse_ui_capture = false;                             /* PORT: release the click queue */
+    {   /* PORT: drain, so no queued click outlives the editor (scores_show's menu_key would eat it) */
+        s16 ex, ey;
+        u8 b;
+        while (host_mouse_click(&ex, &ey, &b)) { }
+    }
     buf[len] = 0;
     /* TODO(verify): the original returns whatever AX draw_glyph left; the only caller ignores it. */
     return 0;

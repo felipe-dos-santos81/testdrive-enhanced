@@ -96,8 +96,8 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 * Steer by moving the mouse left and right; it springs back to straight when you stop.
 * Left button: accelerate while held. Right button: brake while held.
 * Wheel: shift up / down one gear.
-* Menus: left click selects, right click goes back, moving the mouse moves the selection.
-* Middle click pauses. A side button toggles sound (Ctrl-Q / Ctrl-S otherwise).
+* Menus: left click selects, right click goes back, moving the mouse up or down moves the selection.
+* Middle click pauses. One side button toggles sound (Ctrl-Q / Ctrl-S otherwise); the other is fire, held to dismiss the wait and GAME OVER screens.
 * High-score name entry: click letters on the on-screen keyboard, `DEL` deletes, `OK` commits.
 * The cursor is never captured, hidden or confined.
 

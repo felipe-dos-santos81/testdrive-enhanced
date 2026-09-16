@@ -57,10 +57,10 @@ bool host_xt_key_down(u8 xt_scan);
 /* ---- Joystick: first connected gamepad. Axes -32768..32767, buttons bit0 = A, bit1 = B. */
 bool host_joy_read(s16 *x, s16 *y, u8 *buttons);
 
-/* ---- Mouse: raw SDL state, no policy. dx accumulates between calls and is consumed by
+/* ---- Mouse: raw SDL state, no policy. dx and dy accumulate between calls and are consumed by
  * host_mouse_read. Buttons: bit0 left, bit1 right, bit2 middle, bit3 X1, bit4 X2. wheel is the
  * number of steps (+1 up, -1 down) since the last read. */
-void host_mouse_read(s16 *dx, u8 *held, s16 *wheel);
+void host_mouse_read(s16 *dx, s16 *dy, u8 *held, s16 *wheel);
 
 /* Current pointer and one queued press, both in EGA 320x200 screen coordinates. */
 bool host_mouse_pos(s16 *ex, s16 *ey);

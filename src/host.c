@@ -32,6 +32,7 @@ static int kbd_head, kbd_tail;
 
 /* Mouse: raw SDL state, converted to EGA 320x200 coordinates on the way in. */
 static s16 mouse_dx;
+static s16 mouse_dy;
 static s16 mouse_wheel;
 static u8 mouse_held;
 static s16 mouse_pos_x, mouse_pos_y;
@@ -459,6 +460,7 @@ static void process_events(void)
             float rx, ry;
             if (ev.type == SDL_EVENT_MOUSE_MOTION) {
                 mouse_dx = (s16)(mouse_dx + (s16)ev.motion.xrel);
+                mouse_dy = (s16)(mouse_dy + (s16)ev.motion.yrel);
                 rx = ev.motion.x;
                 ry = ev.motion.y;
             } else {
@@ -526,13 +528,15 @@ bool host_joy_read(s16 *x, s16 *y, u8 *buttons)
     return true;
 }
 
-void host_mouse_read(s16 *dx, u8 *held, s16 *wheel)
+void host_mouse_read(s16 *dx, s16 *dy, u8 *held, s16 *wheel)
 {
     process_events();
     if (dx) *dx = mouse_dx;
+    if (dy) *dy = mouse_dy;
     if (held) *held = mouse_held;
     if (wheel) *wheel = mouse_wheel;
     mouse_dx = 0;
+    mouse_dy = 0;
     mouse_wheel = 0;
 }
 
