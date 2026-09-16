@@ -20,9 +20,9 @@ int  text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout);
 
 /* Mouse control policy (docs/superpowers/specs/2026-09-16-mouse-control-design.md). Pure integer
  * arithmetic, host-free, so the scratch self-check can exercise it without linking the game.
- * Steering is relative with auto-centre: a held angle cannot be parked, it springs back when the
- * mouse is idle. MOUSE_DECAY_PER_MS is the single feel knob; thresholds are in render pixels, so a
- * very different --res-scale changes the feel. */
+ * Driving steers by absolute pointer position (mouse_steer_abs below); MOUSE_OFF_THRESH is the
+ * dead-zone half-width around the window centre and the single feel knob. The relative,
+ * auto-centring offset (mouse_steer_step) now serves only the menus' vertical flick. */
 #define MOUSE_OFF_MAX        120
 #define MOUSE_OFF_THRESH      30
 #define MOUSE_DECAY_PER_MS     1
@@ -64,6 +64,7 @@ static inline u8 mouse_joy_nibble(u16 dir)
  * scratch harness can exercise the boundaries. */
 #define MOUSE_HOLD_MS    180
 #define MOUSE_DOUBLE_MS  300
+#define MOUSE_QUIT_MS    600      /* QUIT cell: held this long ends the drive; a tap does nothing */
 #define FIRE_PULSE_POLLS   3
 
 static inline bool mouse_is_hold(uint64_t press_ns, uint64_t now_ns)
@@ -76,11 +77,15 @@ static inline bool mouse_is_double(uint64_t press_ns, uint64_t prev_tap_ns)
 { return prev_tap_ns != 0 && press_ns >= prev_tap_ns &&
          press_ns - prev_tap_ns <= (uint64_t)MOUSE_DOUBLE_MS * 1000000u; }
 
+static inline bool mouse_is_quit_hold(uint64_t press_ns, uint64_t now_ns)
+{ return now_ns - press_ns >= (uint64_t)MOUSE_QUIT_MS * 1000000u; }
+
 /* PORT: on-screen driving strip hit-test (spec 2026-09-16-left-button-mouse-design.md); the original
  * has no mouse cells. */
 /* Driving strip over the dashboard, EGA 320x200. Cells are half-open [x0, x1). */
-enum { CELL_NONE = 0, CELL_STEER_L, CELL_STEER_R, CELL_GEAR_UP, CELL_GEAR_DOWN, CELL_BRAKE, CELL_SOUND };
-#define DRIVE_CELL_COUNT 6
+enum { CELL_NONE = 0, CELL_STEER_L, CELL_STEER_R, CELL_GEAR_UP, CELL_GEAR_DOWN, CELL_BRAKE, CELL_SOUND,
+       CELL_QUIT, CELL_GBOX };
+#define DRIVE_CELL_COUNT 8
 #define STRIP_Y0 176
 #define STRIP_Y1 196
 
@@ -94,6 +99,8 @@ static inline bool drive_cell_x(int cell, s16 *x0, s16 *x1)
     case CELL_GEAR_DOWN: *x0 = 160; *x1 = 190; return true;
     case CELL_BRAKE:     *x0 = 232; *x1 = 284; return true;
     case CELL_SOUND:     *x0 = 290; *x1 = 312; return true;
+    case CELL_QUIT:      *x0 =  82; *x1 = 118; return true;   /* between the steer and gear pairs */
+    case CELL_GBOX:      *x0 = 196; *x1 = 226; return true;   /* between the gear pair and BRAKE */
     default: return false;
     }
 }
@@ -111,6 +118,25 @@ static inline int drive_cell_at(s16 ex, s16 ey)
         if (ex >= x0 && ex < x1) return drive_cell_nth(i);
     }
     return CELL_NONE;
+}
+
+/* PORT: absolute pointer steering. The pointer's x against the window centre is the steer offset
+ * while it is above the strip; on or below the strip, or with no pointer in the window, the car
+ * goes straight, so BRAKE and the gear cells never steer. Feeds mouse_direction, whose
+ * MOUSE_OFF_THRESH becomes the dead-zone half-width. */
+static inline s16 mouse_steer_abs(bool known, s16 x, s16 y)
+{
+    if (!known || y >= STRIP_Y0) return 0;
+    return (s16)(x - 160);
+}
+
+/* PORT: visual state of a strip cell. A latched press lights its own cell wherever the pointer is
+ * now and mutes hover everywhere else; with nothing latched, the hovered cell lights. */
+enum { STRIP_IDLE = 0, STRIP_HOVER, STRIP_PRESSED };
+static inline int strip_cell_state(int cell, int hover, int held)
+{
+    if (held != CELL_NONE) return cell == held ? STRIP_PRESSED : STRIP_IDLE;
+    return cell == hover ? STRIP_HOVER : STRIP_IDLE;
 }
 
 /* PORT: menu sound/back cells (spec 2026-09-16-left-button-mouse-design.md); the original has no
