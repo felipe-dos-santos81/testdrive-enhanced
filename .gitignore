@@ -10,3 +10,6 @@ build*/
 *.exe
 *.dll
 *.log
+
+# Agent tooling scratch (brainstorming mockups, SDD workspace)
+/.superpowers/
