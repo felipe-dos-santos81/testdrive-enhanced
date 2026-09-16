@@ -130,6 +130,10 @@ static inline s16 mouse_steer_abs(bool known, s16 x, s16 y)
     return (s16)(x - 160);
 }
 
+/* PORT: the strip cell latched by the press in progress, CELL_NONE when none (a road press also
+ * reads as CELL_NONE). Read-only, for the renderer's pressed highlight. */
+int mouse_press_cell(void);
+
 /* PORT: visual state of a strip cell. A latched press lights its own cell wherever the pointer is
  * now and mutes hover everywhere else; with nothing latched, the hovered cell lights. */
 enum { STRIP_IDLE = 0, STRIP_HOVER, STRIP_PRESSED };

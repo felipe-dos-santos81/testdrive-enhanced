@@ -1107,7 +1107,8 @@ static const u8 DIGITS[11][7] = {
  * the original draws no strip. */
 /* 5x7 uppercase glyphs for the strip labels, rows top to bottom, bit 0x10 = leftmost pixel (same
  * shape as DIGITS). */
-static const u8 LETTERS[8][7] = {
+static const char LETTER_SET[] = "BRAKESNDQUITGOX";        /* index into LETTERS */
+static const u8 LETTERS[15][7] = {
     /* B */ { 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E },
     /* R */ { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 },
     /* A */ { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
@@ -1116,6 +1117,13 @@ static const u8 LETTERS[8][7] = {
     /* S */ { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },
     /* N */ { 0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11 },
     /* D */ { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E },
+    /* Q */ { 0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D },
+    /* U */ { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+    /* I */ { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F },
+    /* T */ { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },
+    /* G */ { 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F },
+    /* O */ { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+    /* X */ { 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11 },
 };
 
 /* k x k block at original coordinates (x, y) */
@@ -1129,9 +1137,9 @@ static void block(u32 *px, int k, int x, int y, u32 c)
 static void draw_letters(u32 *px, int k, const char *s, int x, int y, u32 c)
 {
     for (int i = 0; s[i]; i++) {
-        int gi = s[i] == 'B' ? 0 : s[i] == 'R' ? 1 : s[i] == 'A' ? 2 : s[i] == 'K' ? 3 :
-                 s[i] == 'E' ? 4 : s[i] == 'S' ? 5 : s[i] == 'N' ? 6 : s[i] == 'D' ? 7 : -1;
-        if (gi < 0) continue;
+        const char *f = strchr(LETTER_SET, s[i]);
+        if (!f) continue;
+        int gi = (int)(f - LETTER_SET);
         for (int row = 0; row < 7; row++)
             for (int col = 0; col < 5; col++)
                 if (LETTERS[gi][row] & (0x10 >> col)) block(px, k, x + i * 6 + col, y + row, c);
@@ -1189,7 +1197,7 @@ static void draw_cracks(u32 *px, int k)
 /* On-screen steering buttons (geometry and hit-test live in platform/input.h). Drawn over the
  * dashboard corners of the driving view; the left button held on one of them steers. */
 static int last_btn_hover;
-static bool last_btn_pressed;
+static int last_btn_held;                                  /* cell latched by the press in progress */
 
 /* PORT: filled rectangle with an edge, for the on-screen strip cells. */
 static void out_rect(u32 *px, int k, int ex0, int ey0, int ex1, int ey1, u32 edge, u32 fill)
@@ -1230,13 +1238,14 @@ static void draw_steer_buttons(u32 *px, int k)
 {
     s16 ex, ey;
     int hover = host_mouse_pos(&ex, &ey) ? drive_cell_at(ex, ey) : CELL_NONE;
-    bool pressed = (host_mouse_buttons() & 0x01) != 0;
+    int held = mouse_press_cell();
     for (int i = 0; i < DRIVE_CELL_COUNT; i++) {
         int cell = drive_cell_nth(i);
         s16 x0, x1;
         if (!drive_cell_x(cell, &x0, &x1)) continue;
         u32 edge = gfx_palette_rgb(15);
-        u32 fill = (cell == hover && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
+        int st = strip_cell_state(cell, hover, held);      /* idle dark grey, hover blue, pressed light blue */
+        u32 fill = gfx_palette_rgb(st == STRIP_PRESSED ? 9 : st == STRIP_HOVER ? 1 : 8);
         out_rect(px, k, x0, STRIP_Y0, x1, STRIP_Y1, edge, fill);
         if (cell == CELL_STEER_L) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4,  1, edge);
         if (cell == CELL_STEER_R) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4, -1, edge);
@@ -1244,6 +1253,8 @@ static void draw_steer_buttons(u32 *px, int k)
         if (cell == CELL_GEAR_DOWN) out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3,  1, edge);
         if (cell == CELL_BRAKE)     draw_letters(px, k, "BRAKE", x0 + 6, STRIP_Y0 + 3, edge);
         else if (cell == CELL_SOUND) draw_letters(px, k, "SND",  x0 + 4, STRIP_Y0 + 3, edge);
+        else if (cell == CELL_QUIT)  draw_letters(px, k, "QUIT", x0 + 6, STRIP_Y0 + 3, edge);
+        else if (cell == CELL_GBOX)  draw_letters(px, k, "GBOX", x0 + 3, STRIP_Y0 + 3, edge);
     }
 }
 
@@ -1254,10 +1265,10 @@ static bool ov_dirty(void)
     if (active) {                                           /* refresh the button highlight live */
         s16 ex, ey;
         int h = host_mouse_pos(&ex, &ey) ? drive_cell_at(ex, ey) : CELL_NONE;
-        bool pressed = (host_mouse_buttons() & 0x01) != 0;
-        if (h != last_btn_hover || pressed != last_btn_pressed) {
+        int held = mouse_press_cell();
+        if (h != last_btn_hover || held != last_btn_held) {
             last_btn_hover = h;
-            last_btn_pressed = pressed;
+            last_btn_held = held;
             d = true;
         }
     }

@@ -59,14 +59,14 @@ static u16 getkey_wait_dx(u16 *dx);
 
 /* ---------------------------------------------------------------- mouse (PORT) */
 
-/* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-left-button-mouse-design.md). Steering
- * is relative with auto-centre; the left button drives by gesture (hold = accelerate / steer / brake,
- * tap = gear / sound / fire, double click on the road = pause). Right button, wheel, middle and side
- * buttons do nothing. Buttons held: bit0 left, bit1 right, bit2 middle, bit3 X1, bit4 X2. */
-typedef struct { s16 off; s16 off_y; u8 held; s16 wheel; s16 x, y; } MouseState;
+/* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-left-button-mouse-design.md). Driving
+ * steers by absolute pointer position (mouse_steer_abs); the left button drives by gesture (hold =
+ * accelerate / steer / brake, tap = gear / sound / gearbox display / fire, a long hold on QUIT ends
+ * the drive, double click on the road = pause). Right button, wheel, middle and side buttons do
+ * nothing. Buttons held: bit0 left, bit1 right, bit2 middle, bit3 X1, bit4 X2. */
+typedef struct { s16 off_y; u8 held; s16 wheel; bool known; s16 x, y; } MouseState;
 
-static s16 mouse_off;
-static s16 mouse_off_y;
+static s16 mouse_off_y;         /* relative vertical offset, menus only */
 static uint64_t mouse_off_ns;
 
 /* PORT: left-button gestures (spec 2026-09-16-left-button-mouse-design.md). A press latches its
@@ -80,6 +80,7 @@ static uint64_t pending_fire_ns; /* road tap's fire, waiting out the double-clic
 static u8       fire_polls;
 static u8       gear_polls;
 static s16      gear_dir;
+static u16      key_pending;     /* GBOX tap: the 'd' character word, returned by the next poll */
 
 /* PORT: on-screen keyboard owns clicks while set; getkey()/mouse_menu() leave them queued for
  * text_input_line instead of converting them into Enter/Esc. */
@@ -87,17 +88,16 @@ static bool mouse_ui_capture;
 
 static MouseState mouse_poll(void)
 {
-    s16 dx, dy; u8 held; s16 wheel;
-    host_mouse_read(&dx, &dy, &held, &wheel);
+    s16 dy; u8 held; s16 wheel;
+    host_mouse_read(NULL, &dy, &held, &wheel);              /* dx unused: steering is absolute */
     uint64_t now = host_time_ns();
     if (mouse_off_ns == 0) mouse_off_ns = now;
     u32 dt = (u32)((now - mouse_off_ns) / 1000000u);
     mouse_off_ns = now;
     if (dt > 250u) dt = 250u;                               /* cap after a stall */
-    mouse_off = mouse_steer_step(mouse_off, dx, dt);
     mouse_off_y = mouse_steer_step(mouse_off_y, dy, dt);
-    MouseState s = { mouse_off, mouse_off_y, held, wheel, -1, -1 };
-    host_mouse_pos(&s.x, &s.y);                             /* for the on-screen steering buttons */
+    MouseState s = { mouse_off_y, held, wheel, false, -1, -1 };
+    s.known = host_mouse_pos(&s.x, &s.y);                   /* steering and the on-screen cells */
     return s;
 }
 
@@ -145,6 +145,7 @@ static void mouse_gestures(void)
         if (cell == CELL_GEAR_UP)        { gear_dir =  1; gear_polls = FIRE_PULSE_POLLS; press_used = true; }
         else if (cell == CELL_GEAR_DOWN) { gear_dir = -1; gear_polls = FIRE_PULSE_POLLS; press_used = true; }
         else if (cell == CELL_SOUND)     { mouse_sound_toggle(); press_used = true; }
+        else if (cell == CELL_GBOX)      { key_pending = 0xFF00u | 'd'; press_used = true; }
     }
     if (press_ns != 0 && (host_mouse_buttons() & 0x01) == 0) {
         bool tap = mouse_is_tap(press_ns, now);
@@ -164,10 +165,17 @@ static void mouse_gestures(void)
     }
 }
 
+/* PORT: the strip cell latched by the press in progress, for the renderer's pressed highlight. */
+int mouse_press_cell(void)
+{
+    return press_ns != 0 ? press_cell : CELL_NONE;
+}
+
 static u16 mouse_drive(void)
 {
     MouseState s = mouse_poll();
     mouse_gestures();
+    uint64_t now = host_time_ns();
 
     /* PORT: fire is emitted neutral (direction 0) — simulation ignores it for gear selection, so a
      * tap can never shift a gear while still satisfying wait_fire_button's bit 0x10. */
@@ -176,10 +184,23 @@ static u16 mouse_drive(void)
         gear_polls--;
         return (u16)((gear_dir > 0 ? 1u : 5u) | 0x10u);
     }
+    if (key_pending != 0) {                              /* GBOX tap: same word as the 'd' key */
+        u16 k = key_pending;
+        key_pending = 0;
+        return k;
+    }
+    /* PORT: QUIT held for MOUSE_QUIT_MS is the keyboard Esc word (0xFFFF). The press is consumed
+     * so its release is not a tap; a release before that is a tap that does nothing. */
+    if (press_ns != 0 && press_cell == CELL_QUIT && (s.held & 0x01) != 0 && mouse_is_quit_hold(press_ns, now)) {
+        press_ns = 0;
+        return 0xFFFFu;
+    }
 
-    s16 steer = s.off;                                   /* motion steering, as before */
+    /* PORT: absolute pointer steering. In demo mode a parked pointer must not count as input
+     * (sim_tick ends the demo on any nonzero word), so only gestures reach the simulation there. */
+    s16 steer = DSW(DS_demo_mode) != 0 ? 0 : mouse_steer_abs(s.known, s.x, s.y);
     bool up = false, down = false;
-    bool holding = press_ns != 0 && (s.held & 0x01) != 0 && mouse_is_hold(press_ns, host_time_ns());
+    bool holding = press_ns != 0 && (s.held & 0x01) != 0 && mouse_is_hold(press_ns, now);
     if (holding) {
         switch (press_cell) {
         case CELL_STEER_L: steer = (s16)-MOUSE_OFF_THRESH; up = true; break;   /* accelerate + turn */
