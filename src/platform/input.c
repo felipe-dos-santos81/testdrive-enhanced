@@ -57,6 +57,72 @@ u8 joy_read(void)
 static u16 getkey_kbd_ctrl(u16 *dx);
 static u16 getkey_wait_dx(u16 *dx);
 
+/* ---------------------------------------------------------------- mouse (PORT) */
+
+/* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-mouse-control-design.md). Steering is
+ * relative with auto-centre; throttle comes from the held buttons; the wheel pulses fire + a
+ * direction to shift one gear. Buttons held: bit0 left, bit1 right, bit2 middle, bit3 X1. */
+typedef struct { s16 off; u8 held; s16 wheel; } MouseState;
+
+static s16 mouse_off;
+static uint64_t mouse_off_ns;
+static s16 mouse_gear_dir;
+static u8 mouse_gear_polls;
+
+static MouseState mouse_poll(void)
+{
+    s16 dx; u8 held; s16 wheel;
+    host_mouse_read(&dx, &held, &wheel);
+    uint64_t now = host_time_ns();
+    if (mouse_off_ns == 0) mouse_off_ns = now;
+    u32 dt = (u32)((now - mouse_off_ns) / 1000000u);
+    mouse_off_ns = now;
+    if (dt > 250u) dt = 250u;                               /* cap after a stall */
+    mouse_off = mouse_steer_step(mouse_off, dx, dt);
+    MouseState s = { mouse_off, held, wheel };
+    return s;
+}
+
+/* Middle click pauses, X1 toggles sound (the Ctrl-P / Ctrl-Q / Ctrl-S actions, same state writes).
+ * In menus, left/right clicks become the pending Enter/Esc; while driving the buttons are held
+ * controls, so the clicks are drained and discarded instead of leaking an Enter into the next menu. */
+static void mouse_meta(bool menus, u16 *pending)
+{
+    s16 ex, ey;
+    u8 btn;
+    while (host_mouse_click(&ex, &ey, &btn)) {
+        if ((btn & 0x04) && DSB(DS_modal_pause) == 0) {      /* middle: pause */
+            u16 dx = 0;
+            DSB(DS_modal_pause) = 1;
+            getkey_wait_dx(&dx);
+            DSB(DS_modal_pause) = 0;
+        } else if (btn & 0x08) {                            /* X1: sound on/off */
+            if (DSB(DS_snd_flags) & 4) {
+                DSB(DS_snd_flags) &= 3;
+            } else {
+                DSB(DS_snd_flags) |= 4;
+                if (DSB(DS_snd_flags) & 2) DSB(DS_snd_playing) |= 2;
+            }
+        } else if (menus && pending && *pending == 0) {
+            if (btn & 0x01) *pending = 0x000D;              /* left: Enter */
+            else if (btn & 0x02) *pending = 0x001B;         /* right: Esc */
+        }
+    }
+}
+
+/* Wheel = one gear step: fire + up / fire + down, held for a few polls so the knob animation starts. */
+static u16 mouse_drive(void)
+{
+    MouseState s = mouse_poll();
+    if (s.wheel > 0) { mouse_gear_dir = 1; mouse_gear_polls = 3; }
+    else if (s.wheel < 0) { mouse_gear_dir = -1; mouse_gear_polls = 3; }
+    if (mouse_gear_polls > 0) {
+        mouse_gear_polls--;
+        return (u16)((mouse_gear_dir > 0 ? 1u : 5u) | 0x10u);
+    }
+    return mouse_direction(s.off, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
+}
+
 static u16 getkey_kbd_ctrl(u16 *dx)
 {
     u16 k = kbd_drain_last();
@@ -227,23 +293,29 @@ static u16 drive_key(u16 dx);
 /* 0x5C24 input_poll_drive */
 u16 input_poll_drive(void)
 {
-    if (!host_held_keys()) return input_poll_drive_bios();
-    /* Drain the buffer; buffered repeats of the held keys are skipped so they cannot displace a real
-     * keystroke ("last key wins" applies to the remaining keys). */
-    u16 key, last = 0;
-    u8 taps = 0;
-    bool other = false;
-    while (host_kbd_read(&key)) {
-        if (is_held_key(key)) taps |= tap_bits(key);
-        else { last = key; other = true; }
+    u16 pending = 0;
+    mouse_meta(false, &pending);                            /* PORT: pause / sound, always available */
+    if (host_held_keys()) {
+        /* Drain the buffer; buffered repeats of the held keys are skipped so they cannot displace a
+         * real keystroke ("last key wins" applies to the remaining keys). */
+        u16 key, last = 0;
+        u8 taps = 0;
+        bool other = false;
+        while (host_kbd_read(&key)) {
+            if (is_held_key(key)) taps |= tap_bits(key);
+            else { last = key; other = true; }
+        }
+        if (other) {
+            u16 r = drive_key(last);
+            if (r != 0) return r;
+        }
+        u16 held = held_controls(taps);
+        if (held) return held;
     }
-    if (other) {
-        u16 r = drive_key(last);
-        if (r != 0) return r;
-    }
-    u16 held = held_controls(taps);
-    if (held) return held;
-    return input_poll_drive_bios();              /* joystick path (no key buffered) */
+    /* PORT: mouse driving when the keyboard is idle. */
+    u16 m = mouse_drive();
+    if (m != 0) return m;
+    return input_poll_drive_bios();                         /* joystick / last key */
 }
 
 static u16 input_poll_drive_bios(void)
