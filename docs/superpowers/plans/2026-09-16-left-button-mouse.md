@@ -478,13 +478,18 @@ static void mouse_menu_cells(void)
 {
     s16 ex, ey;
     int hover = host_mouse_pos(&ex, &ey) ? menu_cell_at(ex, ey) : MENU_CELL_NONE;
+    /* Redraw both cells in full every poll. Repainting only the hovered cell leaves the previous
+     * highlight behind (nothing else repaints this band) and the menu screens are static. The drawn
+     * box is exactly the hit band, so nothing is clickable but invisible. */
     gfx_set_text_colours(0x0F, 0);
-    draw_rect_outline(232, 172, 284, 190, 0x0F);
-    draw_rect_outline(290, 172, 312, 190, 0x0F);
-    if (hover == MENU_CELL_BACK)  gfx_fill_rect(233, 173, 50, 16, 0x08);
-    if (hover == MENU_CELL_SOUND) gfx_fill_rect(291, 173, 20, 16, 0x08);
-    gfx_draw_text("BACK", 244, 178);
-    gfx_draw_text("SND", 295, 178);
+    gfx_fill_rect(232, 176, 52, 16, 0x00);
+    gfx_fill_rect(290, 176, 22, 16, 0x00);
+    if (hover == MENU_CELL_BACK)  gfx_fill_rect(232, 176, 52, 16, 0x08);
+    if (hover == MENU_CELL_SOUND) gfx_fill_rect(290, 176, 22, 16, 0x08);
+    draw_rect_outline(232, 176, 283, 191, 0x0F);
+    draw_rect_outline(290, 176, 311, 191, 0x0F);
+    gfx_draw_text("BACK", 244, 181);
+    gfx_draw_text("SND", 295, 181);
 }
 
 static u16 mouse_menu(void)
