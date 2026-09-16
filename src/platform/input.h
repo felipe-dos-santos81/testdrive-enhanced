@@ -76,12 +76,15 @@ static inline bool mouse_is_double(uint64_t press_ns, uint64_t prev_tap_ns)
 { return prev_tap_ns != 0 && press_ns >= prev_tap_ns &&
          press_ns - prev_tap_ns <= (uint64_t)MOUSE_DOUBLE_MS * 1000000u; }
 
+/* PORT: on-screen driving strip hit-test (spec 2026-09-16-left-button-mouse-design.md); the original
+ * has no mouse cells. */
 /* Driving strip over the dashboard, EGA 320x200. Cells are half-open [x0, x1). */
 enum { CELL_NONE = 0, CELL_STEER_L, CELL_STEER_R, CELL_GEAR_UP, CELL_GEAR_DOWN, CELL_BRAKE, CELL_SOUND };
 #define DRIVE_CELL_COUNT 6
 #define STRIP_Y0 176
 #define STRIP_Y1 196
 
+/* PORT: EGA x band of one strip cell; false for CELL_NONE. */
 static inline bool drive_cell_x(int cell, s16 *x0, s16 *x1)
 {
     switch (cell) {
@@ -95,8 +98,10 @@ static inline bool drive_cell_x(int cell, s16 *x0, s16 *x1)
     }
 }
 
+/* PORT: i-th strip cell in drawing order, for looping over the buttons. */
 static inline int drive_cell_nth(int i) { return CELL_STEER_L + i; }
 
+/* PORT: hit-test a pointer position against the strip; CELL_NONE outside it. */
 static inline int drive_cell_at(s16 ex, s16 ey)
 {
     if (ey < STRIP_Y0 || ey >= STRIP_Y1) return CELL_NONE;
@@ -108,10 +113,13 @@ static inline int drive_cell_at(s16 ex, s16 ey)
     return CELL_NONE;
 }
 
+/* PORT: menu sound/back cells (spec 2026-09-16-left-button-mouse-design.md); the original has no
+ * mouse cells. */
 /* Menu screens carry ♪ and BACK at the right end of the same strip zone; menus and the driving
  * strip never share a screen, so the ranges may coincide. */
 enum { MENU_CELL_NONE = 0, MENU_CELL_SOUND, MENU_CELL_BACK };
 
+/* PORT: hit-test a pointer position against the menu cells. */
 static inline int menu_cell_at(s16 ex, s16 ey)
 {
     if (ey < 176 || ey >= 192) return MENU_CELL_NONE;

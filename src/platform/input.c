@@ -148,7 +148,12 @@ static void mouse_gestures(void)
     }
     if (press_ns != 0 && (host_mouse_buttons() & 0x01) == 0) {
         bool tap = mouse_is_tap(press_ns, now);
-        if (tap && press_cell == CELL_NONE && !press_used)
+        /* PORT: a tap on a cell with no discrete action (road, steer, brake) arms the neutral fire
+         * pulse, so a tap on the drawn strip advances the wait screens; gear/sound taps already
+         * consumed the press. Fire stays direction 0. */
+        bool drive = press_cell == CELL_NONE || press_cell == CELL_STEER_L ||
+                     press_cell == CELL_STEER_R || press_cell == CELL_BRAKE;
+        if (tap && drive && !press_used)
             pending_fire_ns = now;                       /* fire once the double window passes */
         if (tap) prev_tap_ns = now;                      /* only a tap can start a double click */
         press_ns = 0;

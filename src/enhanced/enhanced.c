@@ -1097,6 +1097,8 @@ static const u8 DIGITS[11][7] = {
     { 0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00 },
 };
 
+/* PORT: extra 5x7 glyphs for the on-screen strip labels (spec 2026-09-16-left-button-mouse-design.md);
+ * the original draws no strip. */
 /* 5x7 uppercase glyphs for the strip labels, rows top to bottom, bit 0x10 = leftmost pixel (same
  * shape as DIGITS). */
 static const u8 LETTERS[8][7] = {
@@ -1117,6 +1119,7 @@ static void block(u32 *px, int k, int x, int y, u32 c)
         for (int i = 0; i < k; i++) px[(size_t)(y * k + j) * 320 * k + x * k + i] = c;
 }
 
+/* PORT: render a LETTERS subset at original coordinates; unknown chars are skipped. */
 static void draw_letters(u32 *px, int k, const char *s, int x, int y, u32 c)
 {
     for (int i = 0; s[i]; i++) {
@@ -1182,6 +1185,7 @@ static void draw_cracks(u32 *px, int k)
 static int last_btn_hover;
 static bool last_btn_pressed;
 
+/* PORT: filled rectangle with an edge, for the on-screen strip cells. */
 static void out_rect(u32 *px, int k, int ex0, int ey0, int ex1, int ey1, u32 edge, u32 fill)
 {
     int ow = 320 * k;
@@ -1191,6 +1195,7 @@ static void out_rect(u32 *px, int k, int ex0, int ey0, int ex1, int ey1, u32 edg
                 (y < ey0 * k + k || y >= ey1 * k - k || x < ex0 * k + k || x >= ex1 * k - k) ? edge : fill;
 }
 
+/* PORT: triangle helper for the on-screen steer cells. */
 /* Filled triangle: dir +1 points left, -1 points right. */
 static void out_arrow(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
 {
@@ -1202,6 +1207,7 @@ static void out_arrow(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
         }
 }
 
+/* PORT: triangle helper for the on-screen gear cells. */
 /* Filled triangle: dir -1 points up, +1 points down. */
 static void out_arrow_v(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
 {
@@ -1213,6 +1219,7 @@ static void out_arrow_v(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
         }
 }
 
+/* PORT: draw the on-screen driving strip (steer/gear/brake/sound cells) over the dashboard. */
 static void draw_steer_buttons(u32 *px, int k)
 {
     s16 ex, ey;
