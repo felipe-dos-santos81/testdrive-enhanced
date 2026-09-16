@@ -5,7 +5,9 @@
 #include <stdio.h>
 #include <string.h>
 
-u8 mem[MEM_SIZE];
+/* Initialised to keep it a defined, zero-filled object rather than a common symbol; a 1 MB
+ * tentative definition makes ld request 0x8000 alignment, above the 16 KB __DATA maximum. */
+u8 mem[MEM_SIZE] = { 0 };
 u32 mem_image_size;
 
 static void set_err(char *err, size_t n, const char *fmt, ...)

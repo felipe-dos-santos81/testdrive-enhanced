@@ -1,5 +1,9 @@
 # Original game files (not redistributable)
 /Game/
+/TestDrive/
+
+# macOS
+.DS_Store
 
 # Build output and copied binaries
 build*/

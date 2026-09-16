@@ -6,14 +6,38 @@ SDL3. The game itself is the faithful C reimplementation from
 work as in the original. The view through the windscreen is redrawn at a higher resolution, further draw
 distance and 60 fps. It is not an emulator - the original data is not redistributed, and you need to get it yourself.
 
+This is a fork of [kylofon/testdrive-enhanced](https://github.com/kylofon/testdrive-enhanced), simplified for
+an Apple Silicon port and built for educational purposes only.
+
 ## Requirements
 
-* Your game files in a folder. The game needs `TDEGA.EXE`, `CARS.TXT`, `SCORES`, `TDSND.SND`, the `*.PES`
-  archives and the car `*.BIN` / `*.SS` files. By default it looks in `Game` under the working directory.
+* The original game files, copied into `Game` (see [Game data](#game-data)).
 * CMake 3.24+, a C11 compiler and SDL 3.
 * A multi-core CPU for the default resolution. Rendering is split across all cores.
 
+## Game data
+
+The original data is not redistributed here; the EGA *Test Drive* release can be obtained from
+[Abandonware DOS](https://www.abandonwaredos.com/abandonware-game.php?abandonware=Test+Drive&gid=1600).
+Create a `Game` folder in the repository root, next to this README, and copy the files into it:
+
+```
+testdrive-enhanced/
+└── Game/
+    ├── TDEGA.EXE
+    ├── CARS.TXT
+    ├── SCORES
+    ├── TDSND.SND
+    ├── *.PES
+    └── *.BIN, *.SS
+```
+
+`Game` is the default: with the files in place, `./build/testdrive-enhanced` finds them. To keep them
+elsewhere, pass the folder with `--game-dir DIR`.
+
 ## Build
+
+### Windows (MSYS2 MinGW64)
 
 From the repository root, in Git Bash or an MSYS2 MinGW64 shell:
 
@@ -23,10 +47,24 @@ cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
+### macOS (Apple Silicon)
+
+```bash
+brew install cmake ninja sdl3
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
 ## Run
 
 ```bash
 ./build/testdrive-enhanced.exe --game-dir Game
+```
+
+On macOS the binary has no `.exe` suffix:
+
+```bash
+./build/testdrive-enhanced --game-dir Game
 ```
 
 | Option | Meaning |
