@@ -36,6 +36,7 @@ static s16 mouse_dy;
 static s16 mouse_wheel;
 static u8 mouse_held;
 static s16 mouse_pos_x, mouse_pos_y;
+static bool mouse_inside;      /* pointer known to be in the window: enter/motion set it, leave/focus loss clear it */
 #define MOUSE_CLICK_MAX 8
 static struct { s16 x, y; u8 button; uint64_t ns; } mouse_clicks[MOUSE_CLICK_MAX];
 static int mouse_click_head, mouse_click_tail;
@@ -457,6 +458,7 @@ static void process_events(void)
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             SDL_ConvertEventToRenderCoordinates(renderer, &ev);
+            mouse_inside = true;
             float rx, ry;
             if (ev.type == SDL_EVENT_MOUSE_MOTION) {
                 mouse_dx = (s16)(mouse_dx + (s16)ev.motion.xrel);
@@ -501,9 +503,13 @@ static void process_events(void)
         case SDL_EVENT_MOUSE_WHEEL:
             mouse_wheel = (s16)(mouse_wheel + (ev.wheel.y > 0 ? 1 : ev.wheel.y < 0 ? -1 : 0));
             break;
+        case SDL_EVENT_WINDOW_MOUSE_ENTER:
+            mouse_inside = true;
+            break;
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             mouse_held = 0;                                  /* no stuck accelerate */
+            mouse_inside = false;                            /* no stuck steer or hover either */
             break;
         default:
             break;
@@ -544,7 +550,7 @@ void host_mouse_read(s16 *dx, s16 *dy, u8 *held, s16 *wheel)
 bool host_mouse_pos(s16 *ex, s16 *ey)
 {
     process_events();
-    if (frame_w <= 0 || frame_h <= 0) return false;
+    if (!mouse_inside || frame_w <= 0 || frame_h <= 0) return false;
     if (ex) *ex = mouse_pos_x;
     if (ey) *ey = mouse_pos_y;
     return true;
