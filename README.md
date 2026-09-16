@@ -91,17 +91,17 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 ## Controls
 
-### Mouse (works on every screen)
+### Mouse (left button only)
 
 * Steer by moving the mouse left and right; it springs back to straight when you stop.
-* While driving, hold the left button on the on-screen ◀ / ▶ arrows in the dashboard corners to
-  steer that way (accelerate and turn).
-* Left button: accelerate while held. Right button: brake while held.
-* Wheel: shift up / down one gear.
-* Menus: left click selects, right click goes back, moving the mouse up or down moves the selection.
-* Middle click pauses. One side button toggles sound (Ctrl-Q / Ctrl-S otherwise); the other is fire, held to dismiss the wait and GAME OVER screens.
-* High-score name entry: click letters on the on-screen keyboard, `DEL` deletes, `OK` commits.
-* The cursor is never captured, hidden or confined.
+* Press and hold anywhere on the road to accelerate.
+* Hold the on-screen ◀ / ▶ to steer that way (accelerate and turn), hold BRAKE to brake.
+* Tap ▲ / ▼ for one gear each; tap SND to toggle sound.
+* Tap the road to dismiss the crash / GAME OVER / ending waits; double click the road to pause.
+* Menus: click to select, move the mouse up and down to move the selection, click BACK to go back.
+* High-score name entry: click letters on the on-screen keyboard, `DEL` deletes, `OK` commits,
+  `CANCEL` records nothing.
+* The right button, wheel, middle and side buttons do nothing; the cursor is never captured.
 
 ### Keyboard / gamepad (from the original)
 
