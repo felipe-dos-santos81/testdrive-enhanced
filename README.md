@@ -89,7 +89,19 @@ Targets take arguments, e.g. `make run game_dir=TestDrive scale=5 frame_rate=0 b
 
 Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA monitor.
 
-## Controls (from the original)
+## Controls
+
+### Mouse (works on every screen)
+
+* Steer by moving the mouse left and right; it springs back to straight when you stop.
+* Left button: accelerate while held. Right button: brake while held.
+* Wheel: shift up / down one gear.
+* Menus: left click selects, right click goes back, moving the mouse moves the selection.
+* Middle click pauses. A side button toggles sound (Ctrl-Q / Ctrl-S otherwise).
+* High-score name entry: click letters on the on-screen keyboard, `DEL` deletes, `OK` commits.
+* The cursor is never captured, hidden or confined.
+
+### Keyboard / gamepad (from the original)
 
 * Arrow keys / numeric keypad: steer, accelerate, brake and shift through the gear gate, as in the original.
 * Esc: quit the current drive or menu.
