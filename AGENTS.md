@@ -67,6 +67,17 @@ nibble + bit `0x10` fire), which the mouse layer synthesises.
 - Draw where the screen is drawn: the driving strip in `enhanced.c` (overlay), menu and name-keyboard
   cells with `gfx` primitives, since the overlay is inactive outside a stage.
 - Safety invariant: a click's fire is emitted with direction 0. Fire plus a direction shifts gear.
+- Driving steers by absolute pointer position (`mouse_steer_abs` in `input.h`): x against the window
+  centre, `MOUSE_OFF_THRESH` as the dead-zone half-width; on or below the strip, or with no pointer
+  in the window, the car goes straight. The relative offset (`mouse_steer_step`) only serves the
+  menus' vertical flick now. In demo mode the pointer direction is suppressed: `sim_tick` ends the
+  demo on any nonzero word, so only gestures reach it there.
+- `host_mouse_pos` is false until the pointer has entered the window and after it leaves or focus is
+  lost. Never steer or highlight from a position the host does not vouch for.
+- QUIT and GBOX reuse keyboard words rather than new paths: a `MOUSE_QUIT_MS` hold on QUIT returns
+  `0xFFFF` (the Esc word), a GBOX tap returns `0xFF00 | 'd'` (the gear-box toggle character).
+- The strip's pressed highlight follows the latched cell (`mouse_press_cell()`), not the pointer;
+  `strip_cell_state` in `input.h` is the one rule for idle / hover / pressed.
 
 ## Repo conventions
 

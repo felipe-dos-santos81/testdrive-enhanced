@@ -55,6 +55,16 @@ faithful and `ds_joy_enabled`/input-mode state is untouched.
   themselves with `gfx` primitives, because the overlay is only active inside a stage.
 * A tap's fire is always emitted with direction 0: fire with a direction would shift gear, so the
   invariant is deliberate.
+* Steering is absolute: `mouse_steer_abs` maps the pointer's x against the window centre to the
+  steer offset (dead zone `MOUSE_OFF_THRESH` each side); on or below the strip, or when the host
+  reports no pointer (`host_mouse_pos` false before entry and after leave / focus loss), the car
+  goes straight. In demo mode the pointer direction is dropped because the stage loop ends the demo
+  on any nonzero input word.
+* The QUIT cell (long hold) and GBOX cell (tap) emit the keyboard's own words, `0xFFFF` (Esc) and
+  `0xFF00 | 'd'`, so the stage loop and `sim_input_charkey` need no mouse-specific path.
+* Strip cells have idle / hover / pressed fills chosen by `strip_cell_state`; pressed follows the
+  cell latched at press time (`mouse_press_cell()`), so sliding off a held cell keeps it lit while
+  the action continues.
 
 ## Memory model (`mem.h`)
 

@@ -93,11 +93,15 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 ### Mouse (left button only)
 
-* Steer by moving the mouse left and right; it springs back to straight when you stop.
+* Steer by where the pointer sits: left of the window centre turns left, right of it turns right,
+  and the middle band goes straight. Park the pointer and the turn holds; move it back to
+  straighten. Over the button strip, or with the pointer outside the window, the car goes straight.
 * Press and hold anywhere on the road to accelerate.
 * Hold the on-screen ◀ / ▶ to steer that way (accelerate and turn), hold BRAKE to brake.
-* Tap ▲ / ▼ for one gear each; tap SND to toggle sound.
+* Tap ▲ / ▼ for one gear each; tap GBOX to show or hide the gear box; tap SND to toggle sound.
+* Hold QUIT for about half a second to end the drive, as Esc does. A tap on it does nothing.
 * Tap the road to dismiss the crash / GAME OVER / ending waits; double click the road to pause.
+* Strip cells light up under the pointer and brighter while held.
 * Menus: click to select, move the mouse up and down to move the selection, click BACK to go back.
 * High-score name entry: click letters on the on-screen keyboard, `DEL` deletes, `OK` commits,
   `CANCEL` records nothing.
@@ -115,12 +119,13 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 ### Mouse control
 
-* **Left button only:** steer by moving the mouse, press and hold the road to accelerate, hold the
-  on-screen ◀ / ▶ / BRAKE to steer and brake, tap ▲ / ▼ for one gear each, tap SND for sound, tap the
-  road to dismiss the waiting screens, double click the road to pause.
-* **On-screen controls:** a strip along the dashboard with ◀ ▶ ▲ ▼ BRAKE SND, BACK and SND on the
-  menus, and `CANCEL` on the high-score name keyboard. They are drawn over the game's own screen, so
-  the original art underneath is untouched.
+* **Left button only:** steer by pointer position (left, straight or right of the window centre),
+  press and hold the road to accelerate, hold the on-screen ◀ / ▶ / BRAKE to steer and brake, tap
+  ▲ / ▼ for one gear each, tap GBOX for the gear box, tap SND for sound, hold QUIT to end the drive,
+  tap the road to dismiss the waiting screens, double click the road to pause.
+* **On-screen controls:** a strip along the dashboard with ◀ ▶ QUIT ▲ ▼ GBOX BRAKE SND, BACK and SND
+  on the menus, and `CANCEL` on the high-score name keyboard. They are drawn over the game's own
+  screen, so the original art underneath is untouched, and they highlight under the pointer.
 * **The other mouse buttons do nothing.** Right click, middle click, the wheel and side buttons are
   ignored, and the cursor is never captured, hidden or confined. Keyboard and gamepad are unchanged,
   so a keyboard or gamepad player sees the original behaviour.
