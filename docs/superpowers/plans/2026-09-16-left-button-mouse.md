@@ -388,9 +388,10 @@ static void mouse_gestures(void)
         else if (cell == CELL_SOUND)     { mouse_sound_toggle(); press_used = true; }
     }
     if (press_ns != 0 && (host_mouse_buttons() & 0x01) == 0) {
-        if (mouse_is_tap(press_ns, now) && press_cell == CELL_NONE && !press_used)
+        bool tap = mouse_is_tap(press_ns, now);
+        if (tap && press_cell == CELL_NONE && !press_used)
             pending_fire_ns = now;                       /* fire once the double window passes */
-        prev_tap_ns = now;
+        if (tap) prev_tap_ns = now;                      /* only a tap can start a double click */
         press_ns = 0;
     }
     if (pending_fire_ns != 0 && now - pending_fire_ns >= (uint64_t)MOUSE_DOUBLE_MS * 1000000u) {
