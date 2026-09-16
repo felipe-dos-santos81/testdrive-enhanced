@@ -1097,11 +1097,36 @@ static const u8 DIGITS[11][7] = {
     { 0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00 },
 };
 
+/* 5x7 uppercase glyphs for the strip labels, rows top to bottom, bit 0x10 = leftmost pixel (same
+ * shape as DIGITS). */
+static const u8 LETTERS[8][7] = {
+    /* B */ { 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E },
+    /* R */ { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 },
+    /* A */ { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
+    /* K */ { 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11 },
+    /* E */ { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F },
+    /* S */ { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },
+    /* N */ { 0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11 },
+    /* D */ { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E },
+};
+
 /* k x k block at original coordinates (x, y) */
 static void block(u32 *px, int k, int x, int y, u32 c)
 {
     for (int j = 0; j < k; j++)
         for (int i = 0; i < k; i++) px[(size_t)(y * k + j) * 320 * k + x * k + i] = c;
+}
+
+static void draw_letters(u32 *px, int k, const char *s, int x, int y, u32 c)
+{
+    for (int i = 0; s[i]; i++) {
+        int gi = s[i] == 'B' ? 0 : s[i] == 'R' ? 1 : s[i] == 'A' ? 2 : s[i] == 'K' ? 3 :
+                 s[i] == 'E' ? 4 : s[i] == 'S' ? 5 : s[i] == 'N' ? 6 : s[i] == 'D' ? 7 : -1;
+        if (gi < 0) continue;
+        for (int row = 0; row < 7; row++)
+            for (int col = 0; col < 5; col++)
+                if (LETTERS[gi][row] & (0x10 >> col)) block(px, k, x + i * 6 + col, y + row, c);
+    }
 }
 
 static void draw_timer(u32 *px, int k)
@@ -1204,6 +1229,8 @@ static void draw_steer_buttons(u32 *px, int k)
         if (cell == CELL_STEER_R) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4, -1, edge);
         if (cell == CELL_GEAR_UP)   out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3, -1, edge);
         if (cell == CELL_GEAR_DOWN) out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3,  1, edge);
+        if (cell == CELL_BRAKE)     draw_letters(px, k, "BRAKE", x0 + 6, STRIP_Y0 + 3, edge);
+        else if (cell == CELL_SOUND) draw_letters(px, k, "SND",  x0 + 4, STRIP_Y0 + 3, edge);
     }
 }
 
