@@ -30,6 +30,15 @@ static Uint64 ticks_run;
 static u16 kbd_buf[KBD_SIZE];
 static int kbd_head, kbd_tail;
 
+/* Mouse: raw SDL state, converted to EGA 320x200 coordinates on the way in. */
+static s16 mouse_dx;
+static s16 mouse_wheel;
+static u8 mouse_held;
+static s16 mouse_pos_x, mouse_pos_y;
+#define MOUSE_CLICK_MAX 8
+static struct { s16 x, y; u8 button; } mouse_clicks[MOUSE_CLICK_MAX];
+static int mouse_click_head, mouse_click_tail;
+
 /* Speaker state and square-wave generator. */
 static u16 spk_div;
 static bool spk_on;
@@ -443,6 +452,55 @@ static void process_events(void)
                 gamepad = NULL;
             }
             break;
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            SDL_ConvertEventToRenderCoordinates(renderer, &ev);
+            float rx, ry;
+            if (ev.type == SDL_EVENT_MOUSE_MOTION) {
+                mouse_dx = (s16)(mouse_dx + (s16)ev.motion.xrel);
+                rx = ev.motion.x;
+                ry = ev.motion.y;
+            } else {
+                rx = ev.button.x;
+                ry = ev.button.y;
+            }
+            if (frame_w > 0 && frame_h > 0) {                /* window -> EGA 320x200 */
+                mouse_pos_x = (s16)(rx * 320.0f / (float)frame_w);
+                mouse_pos_y = (s16)(ry * 200.0f / (float)frame_h);
+            }
+            if (ev.type != SDL_EVENT_MOUSE_MOTION) {
+                u8 bit = 0;
+                switch (ev.button.button) {
+                case SDL_BUTTON_LEFT:   bit = 0x01; break;
+                case SDL_BUTTON_RIGHT:  bit = 0x02; break;
+                case SDL_BUTTON_MIDDLE: bit = 0x04; break;
+                case SDL_BUTTON_X1:     bit = 0x08; break;
+                case SDL_BUTTON_X2:     bit = 0x10; break;
+                default: break;
+                }
+                if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    mouse_held |= bit;
+                    int next = (mouse_click_tail + 1) % MOUSE_CLICK_MAX;
+                    if (next != mouse_click_head) {          /* full: drop, like kbd_push */
+                        mouse_clicks[mouse_click_tail].x = mouse_pos_x;
+                        mouse_clicks[mouse_click_tail].y = mouse_pos_y;
+                        mouse_clicks[mouse_click_tail].button = bit;
+                        mouse_click_tail = next;
+                    }
+                } else {
+                    mouse_held &= (u8)~bit;
+                }
+            }
+            break;
+        }
+        case SDL_EVENT_MOUSE_WHEEL:
+            mouse_wheel = (s16)(mouse_wheel + (ev.wheel.y > 0 ? 1 : ev.wheel.y < 0 ? -1 : 0));
+            break;
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            mouse_held = 0;                                  /* no stuck accelerate */
+            break;
         default:
             break;
         }
@@ -464,6 +522,36 @@ bool host_joy_read(s16 *x, s16 *y, u8 *buttons)
     if (x) *x = ax;
     if (y) *y = ay;
     if (buttons) *buttons = b;
+    return true;
+}
+
+void host_mouse_read(s16 *dx, u8 *held, s16 *wheel)
+{
+    process_events();
+    if (dx) *dx = mouse_dx;
+    if (held) *held = mouse_held;
+    if (wheel) *wheel = mouse_wheel;
+    mouse_dx = 0;
+    mouse_wheel = 0;
+}
+
+bool host_mouse_pos(s16 *ex, s16 *ey)
+{
+    process_events();
+    if (frame_w <= 0 || frame_h <= 0) return false;
+    if (ex) *ex = mouse_pos_x;
+    if (ey) *ey = mouse_pos_y;
+    return true;
+}
+
+bool host_mouse_click(s16 *ex, s16 *ey, u8 *button)
+{
+    process_events();
+    if (mouse_click_head == mouse_click_tail) return false;
+    if (ex) *ex = mouse_clicks[mouse_click_head].x;
+    if (ey) *ey = mouse_clicks[mouse_click_head].y;
+    if (button) *button = mouse_clicks[mouse_click_head].button;
+    mouse_click_head = (mouse_click_head + 1) % MOUSE_CLICK_MAX;
     return true;
 }
 
