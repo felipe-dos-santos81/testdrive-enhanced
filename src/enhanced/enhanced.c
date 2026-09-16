@@ -533,6 +533,10 @@ static void draw_road(int b0, int b1)
 /* background where nothing was drawn: sky, mountains, valley                                       */
 
 static double bg_sv, bg_cv;                 /* view direction for the valley floor */
+static float *mist;                         /* RH: ground-mist weight above the horizon */
+
+#define HORIZON_HAZE 0.6f                   /* haze where the valley floor meets the mountains */
+#define MIST_ROWS    5.0                    /* mist falloff above the horizon, in game rows */
 
 static void prepare_background(void)
 {
@@ -556,6 +560,8 @@ static void prepare_background(void)
     for (int r = 0; r < RH; r++) {
         float t = (float)((row_y(r) - WIN_Y0) / (HORIZON - WIN_Y0));
         sky[r] = pack(mix(hex(C_SKY_TOP), hex(C_SKY_LOW), t > 1 ? 1 : t * t * (2.0f - t)));
+        double h = HORIZON - row_y(r);      /* rows above the horizon: ground mist thins out over a few rows */
+        mist[r] = h > 0 ? (float)exp(-h / MIST_ROWS) : 1.0f;
     }
 }
 
@@ -567,8 +573,8 @@ static void valley_row(int oy)
     double dy = y - HORIZON;
     if (dy <= 0) return;
     double D = 180.0 * VALLEY_H / dy;
-    float hz = (float)(1.0 - exp(-D / 38000.0));
-    if (hz > 0.9f) hz = 0.9f;
+    /* approaches HORIZON_HAZE at the horizon, the same amount the mountain feet get, so there is no seam */
+    float hz = (float)(HORIZON_HAZE * (1.0 - exp(-D / 45000.0)));
     double contrast = exp(-D / 30000.0);
     Rgb fa = hex(C_FIELD_A), fb = hex(C_FIELD_B), fc = hex(C_FIELD_C), wood = hex(C_WOOD), hazec = hex(C_HAZE);
     for (int x = 0; x < OW; x++) {
@@ -601,11 +607,10 @@ static void draw_background(int b0, int b1)
             if (vr) {
                 pc[c] = vr[c / SSF];
             } else if (yc >= near_top[c]) {
-                float t = (float)((HORIZON - yc) / (HORIZON - near_top[c] + 0.01));
-                pc[c] = blend(mn, C_HAZE, 0.4f * (1.0f - t));
+                pc[c] = blend(mn, C_HAZE, 0.05f + (HORIZON_HAZE - 0.05f) * mist[r]);
             } else if (yc >= far_top[c]) {
-                float t = (float)((HORIZON - yc) / (HORIZON - far_top[c] + 0.01));
-                pc[c] = blend(yc < snow[c] ? sn : mf, C_HAZE, 0.35f * (1.0f - t));
+                /* mf already carries 0.2 haze: 1 - 0.8 * (1 - 0.5) = HORIZON_HAZE at the foot */
+                pc[c] = blend(yc < snow[c] ? sn : mf, C_HAZE, 0.05f + 0.45f * mist[r]);
             } else {
                 pc[c] = sky[r];
             }
@@ -1001,6 +1006,7 @@ static bool ensure_buffers(void)
     row_filled = xrealloc(row_filled, (size_t)RH * sizeof *row_filled);
     row_suffix = xrealloc(row_suffix, (size_t)RH * sizeof *row_suffix);
     sky = xrealloc(sky, (size_t)RH * sizeof *sky);
+    mist = xrealloc(mist, (size_t)RH * sizeof *mist);
     far_top = xrealloc(far_top, (size_t)RW * sizeof *far_top);
     near_top = xrealloc(near_top, (size_t)RW * sizeof *near_top);
     snow = xrealloc(snow, (size_t)RW * sizeof *snow);

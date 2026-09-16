@@ -6,15 +6,26 @@ SERVICE = Test Drive Enhanced
 # Variables
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
-game_dir ?= Game
-BINARY = $(BUILD_DIR)/testdrive-enhanced
+GENERATOR ?= Ninja
 CMAKE ?= cmake
-CMAKE_FLAGS = -S . -B $(BUILD_DIR) -G Ninja -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+CMAKE_C_COMPILER ?=
+game_dir ?= Game
 scale ?= 3
 res_scale ?= 4
 frame_rate ?= 60
+ARGS ?=
+SDL_CFLAGS = $(shell pkg-config --cflags sdl3 2>/dev/null)
+SYNTAX_FLAGS = -std=c11 -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing -Isrc $(SDL_CFLAGS)
 
-.PHONY: help configure build check rebuild run clean
+ifeq ($(OS),Windows_NT)
+EXE = .exe
+else
+EXE =
+endif
+BINARY = $(BUILD_DIR)/testdrive-enhanced$(EXE)
+CMAKE_FLAGS = -S . -B $(BUILD_DIR) -G "$(GENERATOR)" $(if $(CMAKE_C_COMPILER),-DCMAKE_C_COMPILER=$(CMAKE_C_COMPILER)) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+
+.PHONY: help configure build check rebuild run syntax clean
 
 # ── Environment ──────────────────────────────────────────────────────────────
 
@@ -30,7 +41,7 @@ help: ## Print this help message
 configure: ## Configure the CMake build directory (build)
 	$(CMAKE) $(CMAKE_FLAGS)
 
-build: configure ## Compile the native arm64 binary into build/
+build: configure ## Compile the binary into build/ (usage: make build [BUILD_TYPE=Debug])
 	$(CMAKE) --build $(BUILD_DIR)
 
 rebuild: ## Wipe the build directory and compile from scratch
@@ -39,14 +50,24 @@ rebuild: ## Wipe the build directory and compile from scratch
 	$(CMAKE) --build $(BUILD_DIR)
 
 check: build ## Verify TDEGA.EXE loads from the game directory and exit, without opening a window
-	$(BINARY) --game-dir $(game_dir) --check
+	$(BINARY) --game-dir "$(game_dir)" --check
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 # Needs the original game files: put them in $(game_dir), or pass game_dir=DIR.
 # On this machine the files live in TestDrive, so: make run game_dir=TestDrive
 
-run: build ## Play windowed (usage: make run [game_dir=TestDrive] [scale=3] [res-scale=4] [frame-rate=60] [bios-keys=1])
-	$(BINARY) --game-dir $(game_dir) --scale $(scale) --res-scale $(res_scale) --frame-rate $(frame_rate) $(if $(bios-keys),--bios-keys)
+run: build ## Play windowed (usage: make run [game_dir=TestDrive] [scale=3] [res_scale=4] [frame_rate=60] [bios-keys=1] [ARGS="--foo"])
+	$(BINARY) --game-dir "$(game_dir)" --scale $(scale) --res-scale $(res_scale) --frame-rate $(frame_rate) $(if $(bios-keys),--bios-keys) $(ARGS)
+
+# ── Development ───────────────────────────────────────────────────────────────
+
+syntax: ## Syntax-check sources without linking (usage: make syntax [FILE=src/host.c])
+	@files="$${FILE:-$$(find src -name '*.c' | sort)}"; \
+	for f in $$files; do \
+		echo "  CC -fsyntax-only $$f"; \
+		$(CC) $(SYNTAX_FLAGS) -fsyntax-only $$f || exit 1; \
+	done
+	@echo "Syntax check complete."
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 
