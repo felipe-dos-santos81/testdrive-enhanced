@@ -466,8 +466,9 @@ static void process_events(void)
                 ry = ev.button.y;
             }
             if (frame_w > 0 && frame_h > 0) {                /* window -> EGA 320x200 */
+                float logical_h = (float)frame_h * 6.0f / 5.0f;   /* coordinates are renderer-logical */
                 mouse_pos_x = (s16)(rx * 320.0f / (float)frame_w);
-                mouse_pos_y = (s16)(ry * 200.0f / (float)frame_h);
+                mouse_pos_y = (s16)(ry * 200.0f / logical_h);
             }
             if (ev.type != SDL_EVENT_MOUSE_MOTION) {
                 u8 bit = 0;
@@ -482,7 +483,7 @@ static void process_events(void)
                 if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     mouse_held |= bit;
                     int next = (mouse_click_tail + 1) % MOUSE_CLICK_MAX;
-                    if (next != mouse_click_head) {          /* full: drop, like kbd_push */
+                    if (bit && next != mouse_click_head) {   /* full or unmapped: drop, like kbd_push */
                         mouse_clicks[mouse_click_tail].x = mouse_pos_x;
                         mouse_clicks[mouse_click_tail].y = mouse_pos_y;
                         mouse_clicks[mouse_click_tail].button = bit;
