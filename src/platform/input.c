@@ -532,9 +532,9 @@ int toupper_c(int c)
 /* 0x92A8 text_input_line — high-score name editor, PORT: mouse-capable on-screen keyboard. Keys kept
  * from the original: Enter 0x0D, Left 0x4B00, Right 0x4D00, Backspace 0x08, Del 0x5300, printable
  * 0x20..0x7A and the idle timeout. Insert/overwrite mode is dropped: the faithful editor body is not
- * ported. A clickable grid is added; right click clears and commits (an empty name is not recorded,
- * see scores_enter_name). */
-enum { OSK_COLS = 7, OSK_ROWS = 5, OSK_CELLS = 31,
+ * ported. A clickable grid is added; the CANCEL cell clears and commits (an empty name is not
+ * recorded, see scores_enter_name). The mouse is left-button only: other buttons do nothing. */
+enum { OSK_COLS = 7, OSK_ROWS = 5, OSK_CELLS = 32,
        OSK_X0 = 20, OSK_Y0 = 60, OSK_CW = 40, OSK_CH = 24 };
 
 static const char *osk_label(int i)
@@ -542,7 +542,7 @@ static const char *osk_label(int i)
     static const char *labels[OSK_CELLS] = {
         "A","B","C","D","E","F","G",   "H","I","J","K","L","M","N",
         "O","P","Q","R","S","T","U",   "V","W","X","Y","Z","SPC","<",
-        ">","DEL","OK"
+        ">","DEL","OK","CANCEL"
     };
     return i >= 0 && i < OSK_CELLS ? labels[i] : "";
 }
@@ -569,7 +569,9 @@ static void osk_draw(const char *name, int hover)
         if (i == hover) gfx_fill_rect((s16)(cx + 1), (s16)(cy + 1), OSK_CW - 2, OSK_CH - 2, 0x08);
         draw_rect_outline(cx, cy, (s16)(cx + OSK_CW - 2), (s16)(cy + OSK_CH - 2), 0x07);
         gfx_set_text_colours(0x0F, 0);
-        gfx_draw_text(osk_label(i), (s16)(cx + 4), (s16)(cy + 8));
+        /* PORT: "CANCEL" is wider than a 40px cell; start it 2px in and let it overflow right into
+         * the empty cells 32..34 (not drawn), rather than shrink the shared font. */
+        gfx_draw_text(osk_label(i), (s16)(cx + (i == 31 ? 2 : 4)), (s16)(cy + 8));
     }
 }
 
@@ -614,8 +616,8 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
             s16 ex, ey;
             u8 btn;
             while (host_mouse_click(&ex, &ey, &btn, NULL)) {
+                if (btn != 0x01) continue;                 /* left button only */
                 acted = true;
-                if (btn & 0x02) { buf[0] = 0; goto done; } /* right click: clear and commit */
                 int cell = osk_hit(ex, ey);
                 if (cell >= 0) {
                     set_deadline(timeout);
@@ -631,7 +633,10 @@ int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
                         if (len - 1 > pos) pos++;
                     } else if (cell == 29) {               /* DEL */
                         if (pos != 0) { pos--; buf[pos] = ' '; }
-                    } else {                               /* OK */
+                    } else if (cell == 30) {               /* OK */
+                        goto done;
+                    } else {                               /* CANCEL (31): clear and commit */
+                        buf[0] = 0;
                         goto done;
                     }
                 }
