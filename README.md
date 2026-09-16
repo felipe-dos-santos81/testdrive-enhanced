@@ -1,25 +1,19 @@
 # Test Drive Enhanced — SDL3
 
 An enhanced version of the EGA *Test Drive* (1987) by Accolade / Distinctive Software, running natively on
-SDL3. The game itself is the faithful C reimplementation from
+SDL3. The game is the faithful C reimplementation from
 [test-drive-sdl3](https://github.com/kylofon/test-drive-sdl3), so driving, traffic, police and the game flow
-work as in the original. The view through the windscreen is redrawn at a higher resolution, further draw
-distance and 60 fps. It is not an emulator - the original data is not redistributed, and you need to get it yourself.
+work as in the original. The view through the windscreen is redrawn at a higher resolution, with further draw
+distance and 60 fps. It is not an emulator.
 
 This is a fork of [kylofon/testdrive-enhanced](https://github.com/kylofon/testdrive-enhanced), simplified for
 an Apple Silicon port and built for educational purposes only.
-
-## Requirements
-
-* The original game files, copied into `Game` (see [Game data](#game-data)).
-* CMake 3.24+, a C11 compiler and SDL 3.
-* A multi-core CPU for the default resolution. Rendering is split across all cores.
 
 ## Game data
 
 The original data is not redistributed here; the EGA *Test Drive* release can be obtained from
 [Abandonware DOS](https://www.abandonwaredos.com/abandonware-game.php?abandonware=Test+Drive&gid=1600).
-Create a `Game` folder in the repository root, next to this README, and copy the files into it:
+Create a `Game` folder in the repository root and copy the files into it:
 
 ```
 testdrive-enhanced/
@@ -32,10 +26,22 @@ testdrive-enhanced/
     └── *.BIN, *.SS
 ```
 
-`Game` is the default: with the files in place, `./build/testdrive-enhanced` finds them. To keep them
-elsewhere, pass the folder with `--game-dir DIR`.
+`Game` is the default, so `./build/testdrive-enhanced` finds the files. To keep them elsewhere, pass
+`--game-dir DIR`.
 
-## Build
+## Requirements
+
+* CMake 3.24+, a C11 compiler and SDL 3.
+* A multi-core CPU for the default resolution; rendering is split across all cores.
+
+## Build and run
+
+### macOS (Apple Silicon)
+
+```bash
+brew install cmake ninja sdl3
+make run
+```
 
 ### Windows (MSYS2 MinGW64)
 
@@ -45,27 +51,32 @@ From the repository root, in Git Bash or an MSYS2 MinGW64 shell:
 export PATH="/c/msys64/mingw64/bin:$PATH"
 cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-```
-
-### macOS (Apple Silicon)
-
-```bash
-brew install cmake ninja sdl3
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-## Run
-
-```bash
 ./build/testdrive-enhanced.exe --game-dir Game
 ```
 
-On macOS the binary has no `.exe` suffix:
+Without Make, the manual equivalent is:
 
 ```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ./build/testdrive-enhanced --game-dir Game
 ```
+
+### Makefile targets
+
+`make help` lists them all.
+
+| Target | Meaning |
+|---|---|
+| `build` | Configure and compile into `build/` |
+| `rebuild` | Wipe `build/` and compile from scratch |
+| `check` | Verify `TDEGA.EXE` loads, then exit without opening a window |
+| `run` | Build, then play windowed |
+| `clean` | Remove `build/` |
+
+Targets take arguments, e.g. `make run game_dir=TestDrive scale=5 frame_rate=0 bios-keys=1`.
+
+## Options
 
 | Option | Meaning |
 |---|---|
@@ -120,6 +131,7 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 ## Layout
 
 See `ENGINE.md` for the architecture and the rules the engine follows. In short:
+
 * `src/enhanced/` holds the enhanced road renderer, the screen overlay and the stage clock.
 * `src/mem.*` emulates the real-mode address space the game ran in.
 * `src/host.*` wraps SDL3 and runs the render worker threads.
