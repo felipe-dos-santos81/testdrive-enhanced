@@ -113,6 +113,18 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 ## Changes from original
 
+### Mouse control
+
+* **Left button only:** steer by moving the mouse, press and hold the road to accelerate, hold the
+  on-screen ◀ / ▶ / BRAKE to steer and brake, tap ▲ / ▼ for one gear each, tap SND for sound, tap the
+  road to dismiss the waiting screens, double click the road to pause.
+* **On-screen controls:** a strip along the dashboard with ◀ ▶ ▲ ▼ BRAKE SND, BACK and SND on the
+  menus, and `CANCEL` on the high-score name keyboard. They are drawn over the game's own screen, so
+  the original art underneath is untouched.
+* **The other mouse buttons do nothing.** Right click, middle click, the wheel and side buttons are
+  ignored, and the cursor is never captured, hidden or confined. Keyboard and gamepad are unchanged,
+  so a keyboard or gamepad player sees the original behaviour.
+
 ### Road view
 
 * **Resolution:** the road is drawn at 4× the original resolution by default, with smoothed edges. The cockpit,
@@ -146,10 +158,14 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 
 See `ENGINE.md` for the architecture and the rules the engine follows. In short:
 
-* `src/enhanced/` holds the enhanced road renderer, the screen overlay and the stage clock.
+* `src/enhanced/` holds the enhanced road renderer, the screen overlay, the stage clock and the
+  on-screen driving strip.
 * `src/mem.*` emulates the real-mode address space the game ran in.
-* `src/host.*` wraps SDL3 and runs the render worker threads.
-* `src/platform/` holds the EGA graphics, timer/sound, input and resource layers.
+* `src/host.*` wraps SDL3, runs the render worker threads and owns the keyboard, gamepad and mouse
+  state.
+* `src/platform/` holds the EGA graphics, timer/sound, input and resource layers; the input layer
+  also carries the mouse gesture policy and the on-screen button geometry that the renderer draws
+  from.
 * `src/game/` holds game flow, scene rendering and simulation.
 
 Reverse-engineering tools, specs and file formats are in

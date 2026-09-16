@@ -22,20 +22,39 @@ first). Symbols: `../port/symbols.csv` → generated `src/symbols.h`. Ground tru
 ```
 main.c        args, mem_load_exe(), host_init(), game_main()
 mem.h/.c      real-mode memory: TDEGA.EXE image at segment 0x1000, DGROUP 0x1C9A, heap above   (coordinator)
-host.h/.c     SDL3: window/present, 100.0404 Hz tick, BIOS keyboard queue, gamepad, speaker, files (coordinator)
+host.h/.c     SDL3: window/present, 100.0404 Hz tick, BIOS keyboard queue, gamepad, mouse, speaker, files (coordinator)
 symbols.h     generated DS_*/FN_* constants                                                       (coordinator)
 platform/gfx.*      planar graphics: targets, blitters, fills, text, dissolve, scroll, palette     (graphics agent)
 platform/timer.*    base timer ISR body, song interpreter, delays/deadlines, sound API             (platform agent)
-platform/input.*    input_poll_drive, getkey family, joystick emulation, name editor               (platform agent)
+platform/input.*    input_poll_drive, getkey family, joystick emulation, mouse gestures, name editor (platform agent)
 platform/res.*      DOS block allocator, archive cache, PES/raw loaders, res_find, rand8, CRT rand (platform agent)
 game/game.h         prototypes of game_flow / scene_render / simulation functions                  (coordinator)
 game/flow*.c        game_flow spec: main (game_main), screens, run_game, run_stage, scores         (flow agent)
 game/scene*.c       scene_render spec: projection, road/object drawing, cockpit, crash, ending     (scene agent)
 game/sim*.c         simulation spec: stage setup 0x4792, driving ISR 0x3B1F and everything it runs (sim agent)
-enhanced/*          enhanced road renderer and overlay (not bound by these rules)
+enhanced/*          enhanced road renderer, screen overlay and the on-screen driving strip (not bound by these rules)
 ```
 
-Only `host.c` and `main.c` include SDL. Game and platform code talks to the host through `host.h`.
+Only `host.c`, `main.c` and `mem.c` include SDL (`mem.c` uses `SDL_LoadFile`/`SDL_malloc` to load the
+EXE). Game and platform code talks to the host through `host.h`; `platform/input.c` in particular
+never includes SDL.
+
+## Input (mouse and on-screen controls)
+
+The simulation only ever consumes the original input word: a direction nibble 1–8 plus bit `0x10`
+(fire). Everything added for the mouse synthesises exactly that word, so the driving model stays
+faithful and `ds_joy_enabled`/input-mode state is untouched.
+
+* `host.c` owns the raw mouse state (motion deltas, dy for menus, held buttons, wheel, a press queue
+  with the SDL event timestamp) and exposes it through `host.h`; it holds no policy.
+* `platform/input.c` holds the policy: the press/hold/double-click state machine, the driving and menu
+  mapping, and the on-screen button hit-tests. `platform/input.h` holds the pure predicates and the
+  shared geometry (`drive_cell_at`, `menu_cell_at`) so drawing and hit-testing read one source of
+  truth. A scratch self-check for those pure functions lives outside the repo (not committed).
+* `enhanced.c` draws the driving strip from that geometry; the menu cells and the name keyboard draw
+  themselves with `gfx` primitives, because the overlay is only active inside a stage.
+* A tap's fire is always emitted with direction 0: fire with a direction would shift gear, so the
+  invariant is deliberate.
 
 ## Memory model (`mem.h`)
 
@@ -87,6 +106,10 @@ Only `host.c` and `main.c` include SDL. Game and platform code talks to the host
    in a shared header, add it to **your own** header, and list it in your report.
 
 ## Build and checks
+
+On macOS (the primary development platform): `make build`, `make check` (loads `TDEGA.EXE` and exits
+without opening a window) or `make run`; the Makefile wraps the CMake commands below and takes
+`game_dir`, `scale`, `res_scale`, `frame_rate` and `bios-keys`.
 
 From the repository root with MinGW on PATH (`export PATH="/c/msys64/mingw64/bin:$PATH"`):
 
