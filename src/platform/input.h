@@ -21,8 +21,8 @@ int  text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout);
 /* Mouse control policy (docs/superpowers/specs/2026-09-16-mouse-control-design.md). Pure integer
  * arithmetic, host-free, so the scratch self-check can exercise it without linking the game.
  * Steering is relative with auto-centre: a held angle cannot be parked, it springs back when the
- * mouse is idle. MOUSE_DECAY_PER_MS is the single feel knob; thresholds are in window pixels, so a
- * very different --scale changes the feel. */
+ * mouse is idle. MOUSE_DECAY_PER_MS is the single feel knob; thresholds are in render pixels, so a
+ * very different --res-scale changes the feel. */
 #define MOUSE_OFF_MAX        120
 #define MOUSE_OFF_THRESH      30
 #define MOUSE_DECAY_PER_MS     1
@@ -58,4 +58,23 @@ static inline u8 mouse_joy_nibble(u16 dir)
     case 5: return 2; case 6: return 2 | 8; case 7: return 8; case 8: return 1 | 8;
     default: return 0;
     }
+}
+
+/* On-screen steering buttons, drawn over the dashboard of the driving view (below the road window
+ * rows 19..111) by the enhanced renderer, hit-tested here. EGA 320x200 coordinates; the renderer
+ * scales them by the output scale. Single source of truth so drawing and hit-testing cannot drift. */
+#define STEER_BTN_Y0   176
+#define STEER_BTN_Y1   196
+#define STEER_BTN_LX0    8
+#define STEER_BTN_LX1   56
+#define STEER_BTN_RX0  264
+#define STEER_BTN_RX1  312
+
+/* -1 left button, +1 right button, 0 none. */
+static inline int steer_button_at(s16 ex, s16 ey)
+{
+    if (ey < STEER_BTN_Y0 || ey >= STEER_BTN_Y1) return 0;
+    if (ex >= STEER_BTN_LX0 && ex < STEER_BTN_LX1) return -1;
+    if (ex >= STEER_BTN_RX0 && ex < STEER_BTN_RX1) return 1;
+    return 0;
 }

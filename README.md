@@ -94,6 +94,8 @@ Alt+Enter toggles fullscreen. The window keeps the 4:3 aspect of a 200-line EGA 
 ### Mouse (works on every screen)
 
 * Steer by moving the mouse left and right; it springs back to straight when you stop.
+* While driving, hold the left button on the on-screen ◀ / ▶ arrows in the dashboard corners to
+  steer that way (accelerate and turn).
 * Left button: accelerate while held. Right button: brake while held.
 * Wheel: shift up / down one gear.
 * Menus: left click selects, right click goes back, moving the mouse up or down moves the selection.

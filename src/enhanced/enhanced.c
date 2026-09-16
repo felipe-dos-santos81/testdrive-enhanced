@@ -22,6 +22,7 @@
 #include "../symbols.h"
 #include "../game/game.h"
 #include "../platform/gfx.h"
+#include "../platform/input.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -1151,10 +1152,60 @@ static void draw_cracks(u32 *px, int k)
     }
 }
 
+/* On-screen steering buttons (geometry and hit-test live in platform/input.h). Drawn over the
+ * dashboard corners of the driving view; the left button held on one of them steers. */
+static int last_btn_hover;
+static bool last_btn_pressed;
+
+static void out_rect(u32 *px, int k, int ex0, int ey0, int ex1, int ey1, u32 edge, u32 fill)
+{
+    int ow = 320 * k;
+    for (int y = ey0 * k; y < ey1 * k; y++)
+        for (int x = ex0 * k; x < ex1 * k; x++)
+            px[(size_t)y * ow + x] =
+                (y < ey0 * k + k || y >= ey1 * k - k || x < ex0 * k + k || x >= ex1 * k - k) ? edge : fill;
+}
+
+/* Filled triangle: dir +1 points left, -1 points right. */
+static void out_arrow(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
+{
+    int ow = 320 * k;
+    for (int i = 0; i < len * k; i++)
+        for (int j = -i; j <= i; j++) {
+            int x = cx * k - dir * i, y = cy * k + j;
+            if (x >= 0 && x < ow && y >= 0 && y < 200 * k) px[(size_t)y * ow + x] = c;
+        }
+}
+
+static void draw_steer_buttons(u32 *px, int k)
+{
+    s16 ex, ey;
+    int hov = host_mouse_pos(&ex, &ey) ? steer_button_at(ex, ey) : 0;
+    bool pressed = (host_mouse_buttons() & 0x01) != 0;
+    u32 edge = gfx_palette_rgb(15);
+    u32 fill_l = (hov == -1 && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
+    u32 fill_r = (hov ==  1 && pressed) ? gfx_palette_rgb(7) : gfx_palette_rgb(8);
+    int cy = (STEER_BTN_Y0 + STEER_BTN_Y1) / 2;
+    out_rect(px, k, STEER_BTN_LX0, STEER_BTN_Y0, STEER_BTN_LX1, STEER_BTN_Y1, edge, fill_l);
+    out_rect(px, k, STEER_BTN_RX0, STEER_BTN_Y0, STEER_BTN_RX1, STEER_BTN_Y1, edge, fill_r);
+    out_arrow(px, k, (STEER_BTN_LX0 + STEER_BTN_LX1) / 2, cy, 4,  1, edge);
+    out_arrow(px, k, (STEER_BTN_RX0 + STEER_BTN_RX1) / 2, cy, 4, -1, edge);
+}
+
 static bool ov_dirty(void)
 {
     bool d = dirty;
     dirty = false;
+    if (active) {                                           /* refresh the button highlight live */
+        s16 ex, ey;
+        int h = host_mouse_pos(&ex, &ey) ? steer_button_at(ex, ey) : 0;
+        bool pressed = (host_mouse_buttons() & 0x01) != 0;
+        if (h != last_btn_hover || pressed != last_btn_pressed) {
+            last_btn_hover = h;
+            last_btn_pressed = pressed;
+            d = true;
+        }
+    }
     return d;
 }
 
@@ -1181,6 +1232,7 @@ static void ov_draw(u32 *px, int k)
     }
     draw_cracks(px, k);
     draw_timer(px, k);
+    draw_steer_buttons(px, k);
 }
 
 /* ------------------------------------------------------------------------------------------------ */

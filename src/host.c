@@ -549,6 +549,12 @@ bool host_mouse_pos(s16 *ex, s16 *ey)
     return true;
 }
 
+u8 host_mouse_buttons(void)
+{
+    process_events();
+    return mouse_held;
+}
+
 bool host_mouse_click(s16 *ex, s16 *ey, u8 *button)
 {
     process_events();

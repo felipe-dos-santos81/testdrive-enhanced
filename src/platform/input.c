@@ -63,7 +63,7 @@ static u16 getkey_wait_dx(u16 *dx);
  * relative with auto-centre; throttle comes from the held buttons; the wheel pulses fire + a
  * direction to shift one gear; vertical motion flicks the menus. Buttons held: bit0 left, bit1
  * right, bit2 middle, bit3 X1, bit4 X2. */
-typedef struct { s16 off; s16 off_y; u8 held; s16 wheel; } MouseState;
+typedef struct { s16 off; s16 off_y; u8 held; s16 wheel; s16 x, y; } MouseState;
 
 static s16 mouse_off;
 static s16 mouse_off_y;
@@ -86,7 +86,8 @@ static MouseState mouse_poll(void)
     if (dt > 250u) dt = 250u;                               /* cap after a stall */
     mouse_off = mouse_steer_step(mouse_off, dx, dt);
     mouse_off_y = mouse_steer_step(mouse_off_y, dy, dt);
-    MouseState s = { mouse_off, mouse_off_y, held, wheel };
+    MouseState s = { mouse_off, mouse_off_y, held, wheel, -1, -1 };
+    host_mouse_pos(&s.x, &s.y);                             /* for the on-screen steering buttons */
     return s;
 }
 
@@ -127,7 +128,14 @@ static u16 mouse_drive(void)
         mouse_gear_polls--;
         return (u16)((mouse_gear_dir > 0 ? 1u : 5u) | 0x10u);
     }
-    u16 dir = mouse_direction(s.off, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
+    /* PORT: holding the left button on an on-screen arrow steers that way (with it held, that is
+     * accelerate + turn); otherwise the relative motion offset steers, as before. */
+    s16 steer = s.off;
+    if (s.held & 0x01) {
+        int b = steer_button_at(s.x, s.y);
+        if (b != 0) steer = (s16)(b < 0 ? -MOUSE_OFF_THRESH : MOUSE_OFF_THRESH);
+    }
+    u16 dir = mouse_direction(steer, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
     /* PORT: X2 (host held bit 0x10) is the driving word's fire bit 0x10 — same value, different
      * namespace. It is the only fire a mouse-only player has for the wait screens and GAME OVER. */
     if (s.held & 0x10) dir |= 0x10u;

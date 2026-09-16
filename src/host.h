@@ -66,6 +66,10 @@ void host_mouse_read(s16 *dx, s16 *dy, u8 *held, s16 *wheel);
 bool host_mouse_pos(s16 *ex, s16 *ey);
 bool host_mouse_click(s16 *ex, s16 *ey, u8 *button);
 
+/* Held buttons only, side-effect-free (does not consume motion or wheel), so a renderer can
+ * highlight an on-screen control without stealing input from host_mouse_read. */
+u8 host_mouse_buttons(void);
+
 /* ---- PC speaker: PIT channel 2 divisor and the port 61h gate (bits 0 and 1 both set = sounding).
  * divisor 0 means 65536. Changes take effect from the current tick onward. */
 void host_speaker(u16 divisor, bool on);

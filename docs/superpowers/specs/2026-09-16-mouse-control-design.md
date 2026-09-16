@@ -176,3 +176,21 @@ Interactive, needs a display, not scriptable:
 - **Mice without side buttons** cannot toggle sound from the mouse; `Ctrl-Q` / `Ctrl-S` remain. All
   gameplay, menus, pause and name entry still work, so the mouse-only claim holds for playing.
 - **Windowed only.** No fullscreen or dock changes; `Alt+Enter` stays keyboard.
+
+## Follow-up: on-screen steering buttons
+
+Added after the review of the work above. Scope: two buttons that let the pointer steer without
+relative motion, supplementary to it (nothing is removed).
+
+- Geometry and the pure hit-test (`steer_button_at`, EGA 320x200, half-open rects) live in
+  `src/platform/input.h` so drawing and hit-testing share one source of truth.
+- The enhanced renderer draws them in `ov_draw()` only while a stage is active, over the dashboard
+  corners (y 176..196, clear of the road window rows 19..111). `ov_dirty()` also reports hover or
+  press changes so the highlight refreshes even when the road is still.
+- Holding the left button over an arrow steers that way via the existing truth table; because the
+  left button is also the accelerator, that reads as accelerate-and-turn (direction 8 or 2, and
+  6/4 with the right button held as brake). Sliding off the arrow releases the steer.
+- `host_mouse_buttons()` is a side-effect-free accessor so the renderer can highlight a pressed
+  button without consuming motion or wheel input from `host_mouse_read`.
+- Not included: SDL touch/finger input. The buttons are pointer hit-regions over the visible
+  cursor, so a touchscreen would need `SDL_EVENT_FINGER_*` plumbing later.
