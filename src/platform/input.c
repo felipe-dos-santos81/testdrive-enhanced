@@ -59,17 +59,27 @@ static u16 getkey_wait_dx(u16 *dx);
 
 /* ---------------------------------------------------------------- mouse (PORT) */
 
-/* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-mouse-control-design.md). Steering is
- * relative with auto-centre; throttle comes from the held buttons; the wheel pulses fire + a
- * direction to shift one gear; vertical motion flicks the menus. Buttons held: bit0 left, bit1
- * right, bit2 middle, bit3 X1, bit4 X2. */
+/* PORT: mouse-only control (docs/superpowers/specs/2026-09-16-left-button-mouse-design.md). Steering
+ * is relative with auto-centre; the left button drives by gesture (hold = accelerate / steer / brake,
+ * tap = gear / sound / fire, double click on the road = pause). Right button, wheel, middle and side
+ * buttons do nothing. Buttons held: bit0 left, bit1 right, bit2 middle, bit3 X1, bit4 X2. */
 typedef struct { s16 off; s16 off_y; u8 held; s16 wheel; s16 x, y; } MouseState;
 
 static s16 mouse_off;
 static s16 mouse_off_y;
 static uint64_t mouse_off_ns;
-static s16 mouse_gear_dir;
-static u8 mouse_gear_polls;
+
+/* PORT: left-button gestures (spec 2026-09-16-left-button-mouse-design.md). A press latches its
+ * target until release; released before MOUSE_HOLD_MS it is a tap, still pressed at MOUSE_HOLD_MS
+ * it is a hold; two taps within MOUSE_DOUBLE_MS on the road pause. */
+static uint64_t press_ns;        /* 0 = no press in progress */
+static int      press_cell;      /* cell latched at press time, CELL_NONE = road */
+static bool     press_used;      /* a discrete action already fired for this press */
+static uint64_t prev_tap_ns;     /* release time of the previous tap */
+static uint64_t pending_fire_ns; /* road tap's fire, waiting out the double-click window */
+static u8       fire_polls;
+static u8       gear_polls;
+static s16      gear_dir;
 
 /* PORT: on-screen keyboard owns clicks while set; getkey()/mouse_menu() leave them queued for
  * text_input_line instead of converting them into Enter/Esc. */
@@ -91,56 +101,104 @@ static MouseState mouse_poll(void)
     return s;
 }
 
-/* Middle click pauses, X1 toggles sound (the Ctrl-P / Ctrl-Q / Ctrl-S actions, same state writes).
- * In menus, left/right clicks become the pending Enter/Esc; while driving the buttons are held
- * controls, so the clicks are drained and discarded instead of leaking an Enter into the next menu. */
+/* PORT: menus with the left button — a left click becomes the pending Enter, a right click the
+ * pending Esc. The middle-click pause and X1 sound bindings are gone: pause is a road double click
+ * and sound a tap on the ♪ cell, both handled by mouse_gestures while driving. */
 static void mouse_meta(bool menus, u16 *pending)
 {
     s16 ex, ey;
     u8 btn;
     while (host_mouse_click(&ex, &ey, &btn, NULL)) {
-        if ((btn & 0x04) && DSB(DS_modal_pause) == 0) {      /* middle: pause */
-            u16 dx = 0;
-            DSB(DS_modal_pause) = 1;
-            getkey_wait_dx(&dx);
-            DSB(DS_modal_pause) = 0;
-        } else if (btn & 0x08) {                            /* X1: sound on/off */
-            if (DSB(DS_snd_flags) & 4) {
-                DSB(DS_snd_flags) &= 3;
-            } else {
-                DSB(DS_snd_flags) |= 4;
-                if (DSB(DS_snd_flags) & 2) DSB(DS_snd_playing) |= 2;
-            }
-        } else if (menus && !mouse_ui_capture && pending && *pending == 0) {
+        if (menus && !mouse_ui_capture && pending && *pending == 0) {
             if (btn & 0x01) *pending = 0x000D;              /* left: Enter */
             else if (btn & 0x02) *pending = 0x001B;         /* right: Esc */
         }
     }
 }
 
-/* Wheel = one gear step: fire + up / fire + down, held for a few polls so the knob animation starts. */
+static void mouse_sound_toggle(void)
+{
+    if (DSB(DS_snd_flags) & 4) {
+        DSB(DS_snd_flags) &= 3;
+    } else {
+        DSB(DS_snd_flags) |= 4;
+        if (DSB(DS_snd_flags) & 2) DSB(DS_snd_playing) |= 2;
+    }
+}
+
+static void mouse_pause(void)
+{
+    if (DSB(DS_modal_pause) != 0) return;
+    u16 dx = 0;
+    DSB(DS_modal_pause) = 1;
+    getkey_wait_dx(&dx);
+    DSB(DS_modal_pause) = 0;
+}
+
+static void mouse_gestures(void)
+{
+    uint64_t now = host_time_ns();
+    s16 ex, ey;
+    u8 btn;
+    uint64_t ns;
+    while (host_mouse_click(&ex, &ey, &btn, &ns)) {
+        if (btn != 0x01) continue;                       /* left button only */
+        bool dbl = mouse_is_double(ns, prev_tap_ns);
+        int cell = drive_cell_at(ex, ey);
+        if (dbl) {
+            pending_fire_ns = 0;                         /* the first tap was half of a double */
+            if (cell == CELL_NONE) {
+                mouse_pause();
+                prev_tap_ns = 0;
+                press_ns = 0;                            /* the pause consumed the pointer */
+                continue;
+            }
+        }
+        press_ns = ns ? ns : now;
+        press_cell = cell;
+        press_used = false;
+        if (cell == CELL_GEAR_UP)        { gear_dir =  1; gear_polls = FIRE_PULSE_POLLS; press_used = true; }
+        else if (cell == CELL_GEAR_DOWN) { gear_dir = -1; gear_polls = FIRE_PULSE_POLLS; press_used = true; }
+        else if (cell == CELL_SOUND)     { mouse_sound_toggle(); press_used = true; }
+    }
+    if (press_ns != 0 && (host_mouse_buttons() & 0x01) == 0) {
+        if (mouse_is_tap(press_ns, now) && press_cell == CELL_NONE && !press_used)
+            pending_fire_ns = now;                       /* fire once the double window passes */
+        prev_tap_ns = now;
+        press_ns = 0;
+    }
+    if (pending_fire_ns != 0 && now - pending_fire_ns >= (uint64_t)MOUSE_DOUBLE_MS * 1000000u) {
+        pending_fire_ns = 0;
+        fire_polls = FIRE_PULSE_POLLS;
+    }
+}
+
 static u16 mouse_drive(void)
 {
     MouseState s = mouse_poll();
-    if (s.wheel > 0) { mouse_gear_dir = 1; mouse_gear_polls = 3; }
-    else if (s.wheel < 0) { mouse_gear_dir = -1; mouse_gear_polls = 3; }
-    if (mouse_gear_polls > 0) {
-        mouse_gear_polls--;
-        return (u16)((mouse_gear_dir > 0 ? 1u : 5u) | 0x10u);
+    mouse_gestures();
+
+    /* PORT: fire is emitted neutral (direction 0) — simulation ignores it for gear selection, so a
+     * tap can never shift a gear while still satisfying wait_fire_button's bit 0x10. */
+    if (fire_polls > 0) { fire_polls--; return 0x10u; }
+    if (gear_polls > 0) {                                /* deliberate ▲ ▼ pulse: fire + direction */
+        gear_polls--;
+        return (u16)((gear_dir > 0 ? 1u : 5u) | 0x10u);
     }
-    /* PORT: holding the left button on an on-screen arrow steers that way (with it held, that is
-     * accelerate + turn); otherwise the relative motion offset steers, as before. */
-    s16 steer = s.off;
-    if (s.held & 0x01) {
-        int b = drive_cell_at(s.x, s.y);
-        if (b == CELL_STEER_L) steer = (s16)-MOUSE_OFF_THRESH;
-        else if (b == CELL_STEER_R) steer = (s16)MOUSE_OFF_THRESH;
+
+    s16 steer = s.off;                                   /* motion steering, as before */
+    bool up = false, down = false;
+    bool holding = press_ns != 0 && (s.held & 0x01) != 0 && mouse_is_hold(press_ns, host_time_ns());
+    if (holding) {
+        switch (press_cell) {
+        case CELL_STEER_L: steer = (s16)-MOUSE_OFF_THRESH; up = true; break;   /* accelerate + turn */
+        case CELL_STEER_R: steer = (s16) MOUSE_OFF_THRESH; up = true; break;
+        case CELL_NONE:    up = true; break;                                   /* accelerate */
+        case CELL_BRAKE:   down = true; break;
+        default: break;                                                        /* gear/sound: no hold */
+        }
     }
-    u16 dir = mouse_direction(steer, (s.held & 0x01) != 0, (s.held & 0x02) != 0);
-    /* PORT: X2 (host held bit 0x10) is the driving word's fire bit 0x10 — same value, different
-     * namespace. It is the only fire a mouse-only player has for the wait screens and GAME OVER. */
-    if (s.held & 0x10) dir |= 0x10u;
-    return dir;
+    return mouse_direction(steer, up, down);
 }
 
 static u16 getkey_kbd_ctrl(u16 *dx)
@@ -331,8 +389,6 @@ static u16 drive_key(u16 dx);
 /* 0x5C24 input_poll_drive */
 u16 input_poll_drive(void)
 {
-    u16 pending = 0;
-    mouse_meta(false, &pending);                            /* PORT: pause / sound, always available */
     if (host_held_keys()) {
         /* Drain the buffer; buffered repeats of the held keys are skipped so they cannot displace a
          * real keystroke ("last key wins" applies to the remaining keys). */
