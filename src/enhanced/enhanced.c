@@ -7,9 +7,10 @@
  *     10125 / Z px, x = 120 + 150 X / Z, y = 70 - 180 Y / dist), with distance haze;
  *   - smooth motion: the car's progress inside the current road unit (DS:0912) moves the rows, and the
  *     lateral position and heading, which the simulation only updates per unit, are smoothed;
- *   - 4x supersampling, a depth buffer for sprite occlusion (hill crests, the cliff);
- *   - a sky with mountains and a valley floor below a lowered horizon on the open side, a textured cliff
- *     wall on the other side and an embankment under the road edge;
+ *   - output at a multiple of 320x200 (gfx_output_scale), supersampled 2x2 (4x4 at scale 1), rendered in
+ *     horizontal bands on the host worker pool; a depth buffer for sprite occlusion (crests, the cliff);
+ *   - a sky with mountains and a valley floor below a lowered horizon on the open side, the original's
+ *     slanted rock face on the other side and a hillside under the left road edge;
  *   - the original sprites decoded from their plane data and scaled with distance;
  *   - stage clock (top right), 8 Hz emulation of the frame-counted gear-box delay, own crash sequence.
  * Pixels that the original draws over the road window are left to the EGA image: the mirror, the
@@ -33,9 +34,6 @@
 #define WIN_Y0    19                /* road window rows 19..110 */
 #define WIN_Y1    111
 #define WIN_H     (WIN_Y1 - WIN_Y0)
-#define SS        4                 /* supersampling factor per axis */
-#define RW        (320 * SS)
-#define RH        (WIN_H * SS)
 #define NROWS     120               /* road rows drawn (the original draws 40) */
 #define HORIZON   82.0              /* horizon row on the open side (eye level is row 70) */
 #define VALLEY_H  600.0             /* camera height above the valley floor, road Y units */
@@ -51,13 +49,21 @@ enum { OP_COPY, OP_OR, OP_AND, OP_XOR };
 
 static bool active, dirty;
 
-static u32   col[RW * RH];
-static u8    mat[RW * RH];          /* 3-bit colour index the original would hold (for sprite ops) */
-static float zbuf[RW * RH];
-static u32   out[320 * WIN_H];
+/* Resolution: output OK x (320 x WIN_H), rendered at SSF x SSF samples per output pixel, so Q internal
+ * pixels per original pixel. Buffers are (re)allocated by ensure_buffers(). */
+static int OK, SSF, Q, OW, OH, RW, RH;
+
+static u32   *col;                  /* RW x RH */
+static u8    *mat;                  /* 3-bit colour index the original would hold (for sprite ops) */
+static float *zbuf;
+static bool  *row_claimed;          /* RH: scanline already has its nearest road row */
+static int   *row_filled;           /* RH: pixels written on the scanline (each at most once) */
+static int   *row_suffix;           /* RH: columns [row_suffix, RW) of the scanline are all written */
+static u32   *sky;                  /* RH */
+static float *far_top, *near_top, *snow;   /* RW: mountain outlines */
+static u32   *valley, *soft, *out;  /* OW x OH */
 static u8    cover[320 * 200];      /* 1 = show the EGA image */
 static u8    vram_snap[4][40 * WIN_H];
-static u32   valley[320 * WIN_H];
 
 /* ------------------------------------------------------------------------------------------------ */
 /* colours                                                                                          */
@@ -319,26 +325,26 @@ static double screen_x(double X, double Z) { return 120.0 + 150.0 * X / (Z < 1 ?
 static double screen_y(double Y, double Z) { return 70.0 - 180.0 * Y / (Z < 1 ? 1 : Z); }
 
 /* ------------------------------------------------------------------------------------------------ */
-/* road: drawn near to far; a pixel is written once (zbuf == Z_INF means empty)                    */
+/* road: drawn near to far; a pixel is written once (zbuf == Z_INF means empty). All passes work on  */
+/* a band of internal scanlines [b0, b1) so that bands can run in parallel.                         */
 
-static int ss_col(double x) { return (int)ceil(x * SS - 0.5); }
-static int ss_row(double y) { return (int)ceil((y - WIN_Y0) * SS - 0.5); }
+static int ss_col(double x) { return (int)ceil(x * Q - 0.5); }
+static int ss_row(double y) { return (int)ceil((y - WIN_Y0) * Q - 0.5); }
+static double row_y(int r) { return WIN_Y0 + (r + 0.5) / Q; }
 
-static bool row_claimed[RH];               /* scanline already has its nearest road row */
-static int  row_filled[RH];                /* pixels written on the scanline (each at most once) */
-static int  row_suffix[RH];                /* columns [row_suffix, RW) of the scanline are all written */
-
-static void clear_frame(void)
+static void clear_rows(int b0, int b1)
 {
-    for (int i = 0; i < RW * RH; i++) zbuf[i] = Z_INF;
-    memset(row_claimed, 0, sizeof row_claimed);
-    memset(row_filled, 0, sizeof row_filled);
-    for (int r = 0; r < RH; r++) row_suffix[r] = RW;
+    for (size_t i = (size_t)b0 * RW; i < (size_t)b1 * RW; i++) zbuf[i] = Z_INF;
+    for (int r = b0; r < b1; r++) {
+        row_claimed[r] = false;
+        row_filled[r] = 0;
+        row_suffix[r] = RW;
+    }
 }
 
 static void put(int r, int x, u32 c, u8 m, float z)
 {
-    int p = r * RW + x;
+    size_t p = (size_t)r * RW + x;
     col[p] = c;
     mat[p] = m;
     zbuf[p] = z;
@@ -352,7 +358,7 @@ static bool row_full(int r) { return row_filled[r] >= RW; }
 /* x range swept by an edge pair slanted by `lean` between scanlines r0 and r1 (for culling) */
 static bool strip_offscreen(double ax, double ay, double bx, double by, double lean, int r0, int r1)
 {
-    double y0 = WIN_Y0 + (r0 + 0.5) / SS, y1 = WIN_Y0 + (r1 - 0.5) / SS;
+    double y0 = row_y(r0), y1 = row_y(r1 - 1);
     double v[4] = { ax + lean * (ay - y0), ax + lean * (ay - y1), bx + lean * (by - y0), bx + lean * (by - y1) };
     double lo = v[0], hi = v[0];
     for (int i = 1; i < 4; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; }
@@ -366,7 +372,7 @@ static void span(int r, double x0, double x1, u32 c, u8 m, float z)
     if (b > RW) b = RW;
     if (a >= b) return;
     int end = b < row_suffix[r] ? b : row_suffix[r];
-    const float *pz = zbuf + r * RW;
+    const float *pz = zbuf + (size_t)r * RW;
     for (int i = a; i < end; i++)
         if (pz[i] == Z_INF) put(r, i, c, m, z);
     if (b >= row_suffix[r] && a < row_suffix[r]) row_suffix[r] = a;
@@ -374,23 +380,23 @@ static void span(int r, double x0, double x1, u32 c, u8 m, float z)
 
 /* Road surface between near row a and far row b (scanlines between their projections). As in the
  * original's scanline fill, everything right of the nearest road row on a scanline is cliff. */
-static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff)
+static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff, int b0, int b1)
 {
     if (a->sy <= b->sy + 1e-9) return;              /* seen from behind (past a crest) */
     int r0 = ss_row(b->sy), r1 = ss_row(a->sy);
-    if (r0 < 0) r0 = 0;
-    if (r1 > RH) r1 = RH;
+    if (r0 < b0) r0 = b0;
+    if (r1 > b1) r1 = b1;
     bool alt = (cnt >> 1) & 1, dash = !(cnt & 4);
     for (int r = r0; r < r1; r++) {
         if (row_full(r)) continue;
-        double yc = WIN_Y0 + (r + 0.5) / SS;
+        double yc = row_y(r);
         double s = (yc - b->sy) / (a->sy - b->sy);
         double cx = b->sx + (a->sx - b->sx) * s, hw = b->hw + (a->hw - b->hw) * s;
         double z = 1.0 / (1.0 / b->Z + (1.0 / a->Z - 1.0 / b->Z) * s);
         float zf = (float)z;
         if (dash) {
             double dw = hw * 0.03;
-            if (dw < 0.5 / SS) dw = 0.5 / SS;
+            if (dw < 0.5 / Q) dw = 0.5 / Q;
             span(r, cx - dw, cx + dw, road_hazed(C_DASH, z), 7, zf);
         }
         u32 road = road_hazed(alt ? C_ROAD_B : C_ROAD_A, z), shld = road_hazed(alt ? C_SHLD_B : C_SHLD_A, z);
@@ -399,7 +405,7 @@ static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff)
         span(r, cx + hw, cx + 1.25 * hw, shld, 1, zf);
         if (!row_claimed[r]) {
             row_claimed[r] = true;
-            span(r, cx + 1.25 * hw, RW, hazed(cliff, z), 2, zf);
+            span(r, cx + 1.25 * hw, 1e6, hazed(cliff, z), 2, zf);
         }
     }
 }
@@ -407,15 +413,15 @@ static void road_surface(const Row *a, const Row *b, u8 cnt, u32 cliff)
 /* The rock face above the right road edge between rows a (near) and b (far): the original's plain
  * colour-2 side, slanted like its cliff-edge sprite, up to the top of the window. The nearest face
  * also covers everything to its right. */
-static void cliff_face(const Row *a, const Row *b, bool nearest)
+static void cliff_face(const Row *a, const Row *b, bool nearest, int b0, int b1)
 {
     double ax = a->sx + 1.25 * a->hw, bx = b->sx + 1.25 * b->hw;
     double iza = 1.0 / a->Z, izb = 1.0 / b->Z;
     int rmax = ss_row(a->sy > b->sy ? a->sy : b->sy);
-    if (rmax > RH) rmax = RH;
-    if (rmax <= 0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, CLIFF_LEAN, 0, rmax))) return;
-    for (int r = rmax - 1; r >= 0; r--) {
-        double yc = WIN_Y0 + (r + 0.5) / SS;
+    if (rmax > b1) rmax = b1;
+    if (rmax <= b0 || (!nearest && strip_offscreen(ax, a->sy, bx, b->sy, CLIFF_LEAN, b0, rmax))) return;
+    for (int r = rmax - 1; r >= b0; r--) {
+        double yc = row_y(r);
         double xa = ax + CLIFF_LEAN * (a->sy - yc), xb = bx + CLIFF_LEAN * (b->sy - yc);
         if (!nearest && xa > 320 && xb > 320) break;          /* only moves further right upwards */
         if (row_full(r)) continue;
@@ -426,12 +432,12 @@ static void cliff_face(const Row *a, const Row *b, bool nearest)
         if (c1 > RW) c1 = RW;
         int end = c1 < row_suffix[r] ? c1 : row_suffix[r];
         if (c0 >= end) continue;
-        u32 *pc = col + r * RW;
-        u8 *pm = mat + r * RW;
-        float *pz = zbuf + r * RW;
+        u32 *pc = col + (size_t)r * RW;
+        u8 *pm = mat + (size_t)r * RW;
+        float *pz = zbuf + (size_t)r * RW;
         bool all = true, low = yc > (a->sy < b->sy ? a->sy : b->sy);   /* the foot test can fail */
-        double dt = fabs(dx) < 1e-9 ? 0.0 : 1.0 / (dx * SS);
-        double t0 = (c0 + 0.5 - xa * SS) * dt;
+        double dt = fabs(dx) < 1e-9 ? 0.0 : 1.0 / (dx * Q);
+        double t0 = (c0 + 0.5 - xa * Q) * dt;
         int filled = 0;
         for (int c = c0; c < end; c++) {
             if (pz[c] != Z_INF) continue;
@@ -452,21 +458,22 @@ static void cliff_face(const Row *a, const Row *b, bool nearest)
 /* Below the left road edge: a dark rim straight down, then the hillside falling away outwards to the
  * bottom of the window. On a straight road the hillside stays under the road; on left bends it
  * carries the far road. */
-static void left_side(const Row *a, const Row *b)
+static void left_side(const Row *a, const Row *b, int b0, int b1)
 {
     double ax = a->sx - 1.25 * a->hw, bx = b->sx - 1.25 * b->hw;
     double iza = 1.0 / a->Z, izb = 1.0 / b->Z;
     int r0 = ss_row(a->sy < b->sy ? a->sy : b->sy);
-    if (r0 < 0) r0 = 0;
-    if (r0 >= RH || strip_offscreen(ax, a->sy, bx, b->sy, -HILL_LEAN, r0, RH)) return;
+    if (r0 < b0) r0 = b0;
+    if (r0 >= b1 || strip_offscreen(ax, a->sy, bx, b->sy, -HILL_LEAN, r0, b1)) return;
     double zmin = a->Z < b->Z ? a->Z : b->Z;
     int rim_end = ss_row((a->sy > b->sy ? a->sy : b->sy) + 180.0 * RIM_H / zmin) + 1;
-    for (int r = r0; r < RH; r++) {
-        double yc = WIN_Y0 + (r + 0.5) / SS;
+    for (int r = r0; r < b1; r++) {
+        double yc = row_y(r);
         double xa = ax - HILL_LEAN * (yc - a->sy), xb = bx - HILL_LEAN * (yc - b->sy);
         bool rim = r < rim_end && fabs(bx - ax) > 1e-9;
         if (!rim && xa < 0 && xb < 0) break;                  /* only moves further left downwards */
         if (row_full(r)) continue;
+        const float *pz = zbuf + (size_t)r * RW;
         /* rim: vertical, between the unslanted edge points */
         double dx = bx - ax;
         if (rim) {
@@ -474,9 +481,8 @@ static void left_side(const Row *a, const Row *b)
             if (c0 < 0) c0 = 0;
             if (c1 > RW) c1 = RW;
             for (int c = c0; c < c1; c++) {
-                int p = r * RW + c;
-                if (zbuf[p] != Z_INF) continue;
-                double t = ((c + 0.5) / SS - ax) / dx;
+                if (pz[c] != Z_INF) continue;
+                double t = ((c + 0.5) / Q - ax) / dx;
                 double foot = a->sy + (b->sy - a->sy) * t;
                 double z = 1.0 / (iza + (izb - iza) * t);
                 double v = (yc - foot) * z / 180.0;
@@ -491,9 +497,8 @@ static void left_side(const Row *a, const Row *b)
         if (c0 < 0) c0 = 0;
         if (c1 > RW) c1 = RW;
         for (int c = c0; c < c1; c++) {
-            int p = r * RW + c;
-            if (zbuf[p] != Z_INF) continue;
-            double t = ((c + 0.5) / SS - xa) / dx;
+            if (pz[c] != Z_INF) continue;
+            double t = ((c + 0.5) / Q - xa) / dx;
             t = t < 0 ? 0 : t > 1 ? 1 : t;
             double foot = a->sy + (b->sy - a->sy) * t;
             if (yc < foot) continue;
@@ -505,49 +510,38 @@ static void left_side(const Row *a, const Row *b)
     }
 }
 
-static void draw_road(void)
+static u32 cliff_colour;
+
+static void prepare_road(void)
 {
-    u32 cliff = gfx_palette_rgb(10);                /* colour 2 of the road buffer on screen */
-    for (int i = 0; i < ZLUT_N; i++) cliff_tab[i] = blend(cliff, C_HAZE, haze_lut[i]);
+    cliff_colour = gfx_palette_rgb(10);             /* colour 2 of the road buffer on screen */
+    for (int i = 0; i < ZLUT_N; i++) cliff_tab[i] = blend(cliff_colour, C_HAZE, haze_lut[i]);
+}
+
+static void draw_road(int b0, int b1)
+{
     for (int i = 0; i < NROWS; i++) {
         const Row *a = &rows[i], *b = &rows[i + 1];
-        road_surface(a, b, b->cnt, cliff);
-        cliff_face(a, b, i == 0);
-        left_side(a, b);
+        road_surface(a, b, b->cnt, cliff_colour, b0, b1);
+        cliff_face(a, b, i == 0, b0, b1);
+        left_side(a, b, b0, b1);
     }
 }
 
 /* ------------------------------------------------------------------------------------------------ */
 /* background where nothing was drawn: sky, mountains, valley                                       */
 
-static void draw_background(void)
-{
-    /* valley floor at base resolution */
-    double va = view_deg * M_PI / 180.0, sv = sin(va), cv = cos(va);
-    Rgb fa = hex(C_FIELD_A), fb = hex(C_FIELD_B), fc = hex(C_FIELD_C), wood = hex(C_WOOD), hazec = hex(C_HAZE);
-    for (int y = (int)HORIZON; y < WIN_Y1; y++) {
-        double dy = y + 0.5 - HORIZON;
-        if (dy <= 0) continue;
-        double D = 180.0 * VALLEY_H / dy;
-        float hz = (float)(1.0 - exp(-D / 38000.0));
-        if (hz > 0.9f) hz = 0.9f;
-        double contrast = exp(-D / 30000.0);
-        for (int x = 0; x < 320; x++) {
-            double lat = (x + 0.5 - 120.0) * D / 150.0;
-            double wx = cam_x + D * sv + lat * cv, wz = cam_z + D * cv - lat * sv;
-            double n = 0.6 * noise2(wx / 2600.0, wz / 2600.0, 11) + 0.4 * noise2(wx / 800.0, wz / 800.0, 23);
-            n = 0.5 + (n - 0.5) * contrast;
-            Rgb c = n < 0.5 ? mix(fa, fb, (float)(n * 2.0)) : mix(fb, fc, (float)((n - 0.5) * 2.0));
-            double w = (noise2(wx / 420.0, wz / 420.0, 37) - 0.62) * 3.0 * contrast;
-            if (w > 0) c = mix(c, wood, (float)(w > 1 ? 1 : w));
-            valley[(y - WIN_Y0) * 320 + x] = pack(mix(c, hazec, hz));
-        }
-    }
+static double bg_sv, bg_cv;                 /* view direction for the valley floor */
 
-    /* mountain heights per supersampled column */
-    static float far_top[RW], near_top[RW], snow[RW];
+static void prepare_background(void)
+{
+    double va = view_deg * M_PI / 180.0;
+    bg_sv = sin(va);
+    bg_cv = cos(va);
+
+    /* mountain heights per internal column */
     for (int c = 0; c < RW; c++) {
-        double xc = (c + 0.5) / SS;
+        double xc = (c + 0.5) / Q;
         double th = view_deg + atan((xc - 120.0) / 150.0) * 180.0 / M_PI;
         double u = th / 360.0;
         double big = noise1(u * 26.0, 26, 101);
@@ -558,25 +552,53 @@ static void draw_background(void)
         near_top[c] = (float)(HORIZON - (hn > 0 ? hn : 0));
         snow[c] = hf > 12.5 ? (float)(HORIZON - hf + (hf - 12.5) * 0.45) : -1e9f;   /* snow line */
     }
-
-    u32 sky[RH];
     for (int r = 0; r < RH; r++) {
-        double yc = WIN_Y0 + (r + 0.5) / SS;
-        float t = (float)((yc - WIN_Y0) / (HORIZON - WIN_Y0));
+        float t = (float)((row_y(r) - WIN_Y0) / (HORIZON - WIN_Y0));
         sky[r] = pack(mix(hex(C_SKY_TOP), hex(C_SKY_LOW), t > 1 ? 1 : t * t * (2.0f - t)));
     }
+}
+
+/* Valley floor for output row oy (output resolution). */
+static void valley_row(int oy)
+{
+    u32 *dst = valley + (size_t)oy * OW;
+    double y = WIN_Y0 + (oy + 0.5) / OK;
+    double dy = y - HORIZON;
+    if (dy <= 0) return;
+    double D = 180.0 * VALLEY_H / dy;
+    float hz = (float)(1.0 - exp(-D / 38000.0));
+    if (hz > 0.9f) hz = 0.9f;
+    double contrast = exp(-D / 30000.0);
+    Rgb fa = hex(C_FIELD_A), fb = hex(C_FIELD_B), fc = hex(C_FIELD_C), wood = hex(C_WOOD), hazec = hex(C_HAZE);
+    for (int x = 0; x < OW; x++) {
+        double lat = ((x + 0.5) / OK - 120.0) * D / 150.0;
+        double wx = cam_x + D * bg_sv + lat * bg_cv, wz = cam_z + D * bg_cv - lat * bg_sv;
+        double n = 0.6 * noise2(wx / 2600.0, wz / 2600.0, 11) + 0.4 * noise2(wx / 800.0, wz / 800.0, 23);
+        n = 0.5 + (n - 0.5) * contrast;
+        Rgb c = n < 0.5 ? mix(fa, fb, (float)(n * 2.0)) : mix(fb, fc, (float)((n - 0.5) * 2.0));
+        double w = (noise2(wx / 420.0, wz / 420.0, 37) - 0.62) * 3.0 * contrast;
+        if (w > 0) c = mix(c, wood, (float)(w > 1 ? 1 : w));
+        dst[x] = pack(mix(c, hazec, hz));
+    }
+}
+
+static void draw_background(int b0, int b1)
+{
+    for (int oy = b0 / SSF; oy < b1 / SSF; oy++) valley_row(oy);
     u32 mf = blend(C_MTN_FAR, C_HAZE, 0.2f), mn = C_MTN_NEAR, sn = 0xEAF1F6;
-    for (int r = 0; r < RH; r++) {
-        double yc = WIN_Y0 + (r + 0.5) / SS;
-        u32 *pc = col + r * RW;
-        u8 *pm = mat + r * RW;
-        float *pz = zbuf + r * RW;
-        const u32 *vr = yc >= HORIZON ? valley + ((int)yc - WIN_Y0) * 320 : NULL;
+    for (int r = b0; r < b1; r++) {
+        if (row_full(r)) continue;
+        double yc = row_y(r);
+        u32 *pc = col + (size_t)r * RW;
+        u8 *pm = mat + (size_t)r * RW;
+        const float *pz = zbuf + (size_t)r * RW;
+        int oy = r / SSF;
+        const u32 *vr = WIN_Y0 + (oy + 0.5) / OK > HORIZON ? valley + (size_t)oy * OW : NULL;
         for (int c = 0; c < RW; c++) {
             if (pz[c] != Z_INF) continue;
             pm[c] = 4;                              /* the original's open side is colour 4 */
             if (vr) {
-                pc[c] = vr[c / SS];
+                pc[c] = vr[c / SSF];
             } else if (yc >= near_top[c]) {
                 float t = (float)((HORIZON - yc) / (HORIZON - near_top[c] + 0.01));
                 pc[c] = blend(mn, C_HAZE, 0.4f * (1.0f - t));
@@ -672,23 +694,32 @@ static void make_lut(const Spr *s, int op, Lut lut[16])
 }
 
 typedef struct {
-    FarPtr spr;
+    const Spr *s;
     int op, prio, sub, seq;
     bool raw;                              /* position is the top-left corner (no hotspot) */
     double x, y, k, z;
     float alpha;
+    int base;                              /* XOR pieces: colour index they are applied to (-1: the pixel's) */
+    Lut lut[16];
+    u32 pal[8];
 } Item;
 
 #define MAX_ITEMS 768
 static Item items[MAX_ITEMS];
 static int nitems;
 
-static void add_item(u16 handle_addr, int op, int prio, int sub, bool raw, double x, double y, double k,
-                     double z, float alpha)
+static Item *add_item(u16 handle_addr, int op, int prio, int sub, bool raw, double x, double y, double k,
+                      double z, float alpha)
 {
-    if (nitems == MAX_ITEMS) return;
-    items[nitems] = (Item){ far_rd(DGROUP, handle_addr), op, prio, sub, nitems, raw, x, y, k, z, alpha };
+    if (nitems == MAX_ITEMS) return NULL;
+    const Spr *spr = spr_get(far_rd(DGROUP, handle_addr));   /* decoded here, not on the worker threads */
+    if (!spr) return NULL;
+    Item *it = &items[nitems];
+    *it = (Item){ spr, op, prio, sub, nitems, raw, x, y, k, z, alpha, -1, { { 0 } }, { 0 } };
+    make_lut(spr, op, it->lut);
+    for (int m = 0; m < 8; m++) it->pal[m] = hazed(gfx_palette_rgb((u8)(m | 8)), z);
     nitems++;
+    return it;
 }
 
 static int item_cmp(const void *pa, const void *pb)
@@ -700,54 +731,54 @@ static int item_cmp(const void *pa, const void *pb)
     return a->seq - b->seq;
 }
 
-static void draw_item(const Item *it)
+static void draw_item(const Item *it, int b0, int b1)
 {
-    const Spr *s = spr_get(it->spr);
-    if (!s) return;
+    const Spr *s = it->s;
     double k = it->k;
-    if (s->h * k * SS < 0.75) return;
+    if (s->h * k * Q < 0.75) return;
     double x0 = it->x - (it->raw ? 0 : s->hx * k), y0 = it->y - (it->raw ? 0 : s->hy * k);
     int c0 = ss_col(x0), c1 = ss_col(x0 + s->w * k), r0 = ss_row(y0), r1 = ss_row(y0 + s->h * k);
     if (c0 < 0) c0 = 0;
     if (c1 > RW) c1 = RW;
-    if (r0 < 0) r0 = 0;
-    if (r1 > RH) r1 = RH;
+    if (r0 < b0) r0 = b0;
+    if (r1 > b1) r1 = b1;
     if (c0 >= c1 || r0 >= r1) return;
 
-    Lut lut[16];
-    make_lut(s, it->op, lut);
-    u32 pal[8];
-    for (int m = 0; m < 8; m++) pal[m] = hazed(gfx_palette_rgb((u8)(m | 8)), it->z);
     float zt = (float)it->z - Z_EPS;
-    double inv = 1.0 / (k * SS);
+    double inv = 1.0 / (k * Q);
     for (int r = r0; r < r1; r++) {
-        int sy = (int)floor((r + 0.5 + (WIN_Y0 - y0) * SS) * inv);
+        int sy = (int)floor((r + 0.5 + (WIN_Y0 - y0) * Q) * inv);
         if (sy < 0) sy = 0;
         if (sy >= s->h) sy = s->h - 1;
         const u8 *srow = s->bits + sy * s->w;
+        size_t row = (size_t)r * RW;
         for (int c = c0; c < c1; c++) {
-            int p = r * RW + c;
+            size_t p = row + c;
             if (zbuf[p] < zt) continue;
-            int sx = (int)floor((c + 0.5 - x0 * SS) * inv);
+            int sx = (int)floor((c + 0.5 - x0 * Q) * inv);
             if (sx < 0) sx = 0;
             if (sx >= s->w) sx = s->w - 1;
-            const Lut *L = &lut[srow[sx]];
+            const Lut *L = &it->lut[srow[sx]];
             if (!L->touch) continue;
-            u8 m = (u8)(((mat[p] & L->a) | L->o) ^ L->x);
+            u8 m = (u8)((((it->base < 0 ? mat[p] : (u8)it->base) & L->a) | L->o) ^ L->x);
             mat[p] = m;
-            col[p] = it->alpha >= 1.0f ? pal[m] : blend(col[p], pal[m], it->alpha);
+            col[p] = it->alpha >= 1.0f ? it->pal[m] : blend(col[p], it->pal[m], it->alpha);
         }
     }
 }
 
-/* Size classes. Poles, posts, signs and roadside pieces come in 4 scales chosen from s = W/16
- * (W = quarter-pixel half-width) and are drawn for W = 128 * (idx + 1). Traffic comes in 5 scales
- * chosen from the traffic_scale table and is drawn for the half-widths below. */
+/* Size classes (W = quarter-pixel road half-width at the object). Poles, posts, signs and roadside
+ * pieces come in 4 scales drawn for W = 128 * (idx + 1); traffic comes in 5 scales (table offsets
+ * 0, 8, .. 32) drawn for the half-widths in TRAFFIC_W. The original picks the scale from the row; here
+ * the most detailed scale is used that is still drawn at LOD_MIN_K of its size or larger, so the
+ * smaller sprites give way to the larger ones further away, and sprites are mostly scaled down. */
+#define LOD_MIN_K 0.5
+
 static int small_idx(double W)
 {
-    double s = W / 16.0;
-    if (s > 31) s = 31;
-    return (int)s >> 3;
+    for (int idx = 3; idx > 0; idx--)
+        if (128.0 * (idx + 1) * LOD_MIN_K <= W) return idx;
+    return 0;
 }
 static double small_k(double W, int idx)
 {
@@ -761,12 +792,12 @@ static double traffic_k(double Z, u8 ts)
     return k > 1.35 ? 1.35 : k;
 }
 
-static u8 traffic_scale(double t)
+static u8 traffic_scale(double Z)
 {
-    int row = (int)ceil(t - 1e-6);
-    if (row < 0) row = 0;
-    if (row > 39) return 0;
-    return DSB((u16)(DS_traffic_scale_main + row));
+    double W = 10125.0 * 4.0 / Z;
+    for (int l = 4; l > 0; l--)
+        if (TRAFFIC_W[l] * LOD_MIN_K <= W) return (u8)(l * 8);
+    return 0;
 }
 
 static float fade_alpha(int j, u16 pos, double t, uint64_t now)
@@ -814,8 +845,12 @@ static void collect_objects(void)
             if (type < 6) {
                 double s = W / 16.0 > 31 ? 31 : W / 16.0;
                 double y = r->sy - floor(s / 2.0) * cnt;
-                add_item((u16)(0x0FC7 + (type << 4) + 4 * idx), OP_XOR, 0, 0, false,
-                         r->sx + 1.25 * r->hw, y, k, r->Z, 1.0f);
+                Item *it = add_item((u16)(0x0FC7 + (type << 4) + 4 * idx), OP_XOR, 0, 0, false,
+                                    r->sx + 1.25 * r->hw, y, k, r->Z, 1.0f);
+                /* The original XORs them onto whatever lies below, so the grass mounds (rck*, types 0-1)
+                 * straddling the shoulder edge came out half green, half black. Apply each type to one
+                 * backdrop: mounds to the shoulder (green), tufts and cracks to the cliff. */
+                if (it) it->base = type < 2 ? 1 : 2;
             }
         }
     }
@@ -830,7 +865,7 @@ static void collect_objects(void)
         double X, Y, Z;
         if (t < 0.4 || !sample_road(t, &X, &Y, &Z)) continue;
         double Xl = X + (j < 5 ? -ROAD_HW / 2 : ROAD_HW / 2);
-        u8 ts = traffic_scale(t);
+        u8 ts = traffic_scale(Z);
         u16 e = (u16)(ts + DSW((u16)(si + 6)));
         double k = traffic_k(Z, ts);
         float alpha = fade_alpha(j, pos, t, now);
@@ -846,7 +881,7 @@ static void collect_objects(void)
         double X, Y, Z;
         if (t >= 0.4 && sample_road(t, &X, &Y, &Z)) {
             double Xc = X + ROAD_HW / 2 - DSS(DS_r_cop_lane) * ROAD_HW / 16.0;
-            u8 ts = traffic_scale(t);
+            u8 ts = traffic_scale(Z);
             u16 e = (u16)(0x132B + ts);
             double k = traffic_k(Z, ts);
             double x = screen_x(Xc, Z), y = screen_y(Y, Z);
@@ -879,52 +914,131 @@ static void collect_objects(void)
     }
 }
 
-static void draw_objects(void)
+static void sort_objects(void) { qsort(items, (size_t)nitems, sizeof items[0], item_cmp); }
+
+static void draw_objects(int b0, int b1)
 {
-    qsort(items, (size_t)nitems, sizeof items[0], item_cmp);
-    for (int i = 0; i < nitems; i++) draw_item(&items[i]);
+    for (int i = 0; i < nitems; i++) draw_item(&items[i], b0, b1);
 }
 
 /* ------------------------------------------------------------------------------------------------ */
 /* output, coverage, overlay                                                                        */
 
-#define SHARPEN 0.4f                      /* unsharp mask amount after the resolve */
+static float sharpen = 0.4f;               /* unsharp mask amount after the resolve */
 
-static void downsample(void)
+/* Output rows [o0, o1): average SSF x SSF samples in linear light. */
+static void resolve_rows(int o0, int o1)
 {
-    static u32 soft[320 * WIN_H];
-    for (int y = 0; y < WIN_H; y++) {
-        for (int x = 0; x < 320; x++) {
-            u32 r = 0, g = 0, b = 0;                     /* averaged in linear light */
-            for (int j = 0; j < SS; j++) {
-                const u32 *p = col + (y * SS + j) * RW + x * SS;
-                for (int i = 0; i < SS; i++) {
+    u32 n = (u32)(SSF * SSF), h = n / 2;
+    for (int y = o0; y < o1; y++) {
+        u32 *dst = soft + (size_t)y * OW;
+        for (int x = 0; x < OW; x++) {
+            u32 r = 0, g = 0, b = 0;
+            for (int j = 0; j < SSF; j++) {
+                const u32 *p = col + (size_t)(y * SSF + j) * RW + (size_t)x * SSF;
+                for (int i = 0; i < SSF; i++) {
                     r += to_linear[p[i] >> 16 & 255];
                     g += to_linear[p[i] >> 8 & 255];
                     b += to_linear[p[i] & 255];
                 }
             }
-            u32 n = SS * SS, h = n / 2;
-            soft[y * 320 + x] = (u32)to_srgb[(r + h) / n] << 16 | (u32)to_srgb[(g + h) / n] << 8
-                                | to_srgb[(b + h) / n];
+            dst[x] = (u32)to_srgb[(r + h) / n] << 16 | (u32)to_srgb[(g + h) / n] << 8 | to_srgb[(b + h) / n];
         }
     }
-    for (int y = 0; y < WIN_H; y++) {
-        const u32 *up = soft + (y > 0 ? y - 1 : y) * 320, *cur = soft + y * 320;
-        const u32 *dn = soft + (y < WIN_H - 1 ? y + 1 : y) * 320;
-        for (int x = 0; x < 320; x++) {
-            int xl = x > 0 ? x - 1 : x, xr = x < 319 ? x + 1 : x;
+}
+
+/* Output rows [o0, o1): unsharp mask from the resolved image (reads the neighbouring rows). */
+static void sharpen_rows(int o0, int o1)
+{
+    int amt = (int)(sharpen * 256.0f);
+    for (int y = o0; y < o1; y++) {
+        const u32 *up = soft + (size_t)(y > 0 ? y - 1 : y) * OW, *cur = soft + (size_t)y * OW;
+        const u32 *dn = soft + (size_t)(y < OH - 1 ? y + 1 : y) * OW;
+        u32 *dst = out + (size_t)y * OW;
+        for (int x = 0; x < OW; x++) {
+            int xl = x > 0 ? x - 1 : x, xr = x < OW - 1 ? x + 1 : x;
             u32 v = 0;
             for (int sh = 0; sh <= 16; sh += 8) {
                 int c = (int)(cur[x] >> sh & 255);
                 int nb = (int)(up[x] >> sh & 255) + (int)(dn[x] >> sh & 255)
                          + (int)(cur[xl] >> sh & 255) + (int)(cur[xr] >> sh & 255);
-                int o = c + (int)(SHARPEN * (float)(c * 4 - nb) / 4.0f);
+                int o = c + ((c * 4 - nb) * amt >> 10);
                 v |= (u32)(o < 0 ? 0 : o > 255 ? 255 : o) << sh;
             }
-            out[y * 320 + x] = v;
+            dst[x] = v;
         }
     }
+}
+
+/* ------------------------------------------------------------------------------------------------ */
+/* frame orchestration                                                                              */
+
+static void *xrealloc(void *p, size_t n)
+{
+    void *q = realloc(p, n ? n : 1);
+    if (!q) { free(p); return NULL; }
+    return q;
+}
+
+static bool ensure_buffers(void)
+{
+    int k = gfx_output_scale();
+    if (k == OK && col) return true;
+    OK = k;
+    SSF = k == 1 ? 4 : 2;
+    Q = OK * SSF;
+    OW = 320 * OK;
+    OH = WIN_H * OK;
+    RW = 320 * Q;
+    RH = WIN_H * Q;
+    sharpen = k == 1 ? 0.4f : 0.25f;
+    size_t rp = (size_t)RW * RH, op = (size_t)OW * OH;
+    col = xrealloc(col, rp * sizeof *col);
+    mat = xrealloc(mat, rp * sizeof *mat);
+    zbuf = xrealloc(zbuf, rp * sizeof *zbuf);
+    row_claimed = xrealloc(row_claimed, (size_t)RH * sizeof *row_claimed);
+    row_filled = xrealloc(row_filled, (size_t)RH * sizeof *row_filled);
+    row_suffix = xrealloc(row_suffix, (size_t)RH * sizeof *row_suffix);
+    sky = xrealloc(sky, (size_t)RH * sizeof *sky);
+    far_top = xrealloc(far_top, (size_t)RW * sizeof *far_top);
+    near_top = xrealloc(near_top, (size_t)RW * sizeof *near_top);
+    snow = xrealloc(snow, (size_t)RW * sizeof *snow);
+    valley = xrealloc(valley, op * sizeof *valley);
+    soft = xrealloc(soft, op * sizeof *soft);
+    out = xrealloc(out, op * sizeof *out);
+    if (!col || !mat || !zbuf || !row_claimed || !row_filled || !row_suffix || !sky || !far_top || !near_top
+        || !snow || !valley || !soft || !out) {
+        OK = 0;
+        return false;
+    }
+    return true;
+}
+
+#define MAX_BANDS 64
+static int nbands, band_edge[MAX_BANDS + 1];   /* output rows */
+
+static void plan_bands(void)
+{
+    nbands = OH / 8 < 24 ? OH / 8 : 24;
+    if (nbands < 1) nbands = 1;
+    for (int i = 0; i <= nbands; i++) band_edge[i] = OH * i / nbands;
+}
+
+static void render_band(int i, void *ctx)
+{
+    (void)ctx;
+    int o0 = band_edge[i], o1 = band_edge[i + 1], b0 = o0 * SSF, b1 = o1 * SSF;
+    clear_rows(b0, b1);
+    draw_road(b0, b1);
+    draw_background(b0, b1);
+    draw_objects(b0, b1);
+    resolve_rows(o0, o1);
+}
+
+static void sharpen_band(int i, void *ctx)
+{
+    (void)ctx;
+    sharpen_rows(band_edge[i], band_edge[i + 1]);
 }
 
 static void cover_rect(int x0, int y0, int w, int h)
@@ -982,7 +1096,14 @@ static const u8 DIGITS[11][7] = {
     { 0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00 },
 };
 
-static void draw_timer(u32 *px)
+/* k x k block at original coordinates (x, y) */
+static void block(u32 *px, int k, int x, int y, u32 c)
+{
+    for (int j = 0; j < k; j++)
+        for (int i = 0; i < k; i++) px[(size_t)(y * k + j) * 320 * k + x * k + i] = c;
+}
+
+static void draw_timer(u32 *px, int k)
 {
     u16 secs = (u16)(DSW(DS_g_stageTime) / 12);          /* the results screen's seconds */
     char s[8];
@@ -990,36 +1111,38 @@ static void draw_timer(u32 *px)
     s[0] = (char)('0' + mm / 10); s[1] = (char)('0' + mm % 10); s[2] = ':';
     s[3] = (char)('0' + (secs % 60) / 10); s[4] = (char)('0' + (secs % 60) % 10);
     const int n = 5, cw = 6, x0 = 314 - (n * cw - 1), y0 = 6;
-    for (int y = y0 - 3; y < y0 + 10; y++)
-        for (int x = x0 - 4; x < x0 + n * cw + 3; x++) {
-            bool corner = (y == y0 - 3 || y == y0 + 9) && (x == x0 - 4 || x == x0 + n * cw + 2);
-            if (!corner) px[y * 320 + x] = blend(px[y * 320 + x], 0x000000, 0.62f);
+    for (int y = (y0 - 3) * k; y < (y0 + 10) * k; y++)
+        for (int x = (x0 - 4) * k; x < (x0 + n * cw + 3) * k; x++) {
+            bool corner = (y < (y0 - 2) * k || y >= (y0 + 9) * k) && (x < (x0 - 3) * k || x >= (x0 + n * cw + 2) * k);
+            if (!corner) px[(size_t)y * 320 * k + x] = blend(px[(size_t)y * 320 * k + x], 0x000000, 0.62f);
         }
     for (int i = 0; i < n; i++) {
         const u8 *g = DIGITS[s[i] == ':' ? 10 : s[i] - '0'];
         for (int y = 0; y < 7; y++)
             for (int x = 0; x < 5; x++)
                 if (g[y] & (0x10 >> x)) {
-                    px[(y0 + y + 1) * 320 + x0 + i * cw + x + 1] = 0x202020;
-                    px[(y0 + y) * 320 + x0 + i * cw + x] = 0xFFE680;
+                    block(px, k, x0 + i * cw + x + 1, y0 + y + 1, 0x202020);
+                    block(px, k, x0 + i * cw + x, y0 + y, 0xFFE680);
                 }
     }
 }
 
-static void plot_crack(u32 *px, int x, int y, u32 c)
-{
-    if (x < 0 || x >= 320 || y < WIN_Y0 || y >= WIN_Y1 || cover[y * 320 + x]) return;
-    px[y * 320 + x] = c;
-}
-
-static void draw_cracks(u32 *px)
+/* Crack lines at output resolution, about half an original pixel wide. */
+static void draw_cracks(u32 *px, int k)
 {
     u32 c = gfx_palette_rgb(15);
+    int w = k / 2 > 1 ? k / 2 : 1, ow = 320 * k;
     for (int i = 0; i < ncracks; i++) {
-        int x0 = cracks[i].x0, y0 = cracks[i].y0, x1 = cracks[i].x1, y1 = cracks[i].y1;
+        int x0 = cracks[i].x0 * k + k / 2, y0 = cracks[i].y0 * k + k / 2;
+        int x1 = cracks[i].x1 * k + k / 2, y1 = cracks[i].y1 * k + k / 2;
         int dx = abs(x1 - x0), dy = -abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
         for (;;) {
-            plot_crack(px, x0, y0, c);
+            for (int j = 0; j < w; j++)
+                for (int m = 0; m < w; m++) {
+                    int x = x0 + m - w / 2, y = y0 + j - w / 2;
+                    if (x < 0 || x >= ow || y < WIN_Y0 * k || y >= WIN_Y1 * k || cover[(y / k) * 320 + x / k]) continue;
+                    px[(size_t)y * ow + x] = c;
+                }
             if (x0 == x1 && y0 == y1) break;
             int e2 = 2 * err;
             if (e2 >= dy) { err += dy; x0 += sx; }
@@ -1035,9 +1158,9 @@ static bool ov_dirty(void)
     return d;
 }
 
-static void ov_draw(u32 *px)
+static void ov_draw(u32 *px, int k)
 {
-    if (!active) return;
+    if (!active || k != OK) return;
     for (int y = WIN_Y0; y < WIN_Y1; y++) {
         const u8 *p0 = gfx_ega_plane(0) + y * 40, *p1 = gfx_ega_plane(1) + y * 40;
         const u8 *p2 = gfx_ega_plane(2) + y * 40, *p3 = gfx_ega_plane(3) + y * 40;
@@ -1048,12 +1171,16 @@ static void ov_draw(u32 *px)
             for (int b = 0; b < 8; b++) {
                 int x = bx * 8 + b;
                 if (cover[y * 320 + x] || (changed & (0x80 >> b))) continue;
-                px[y * 320 + x] = out[(y - WIN_Y0) * 320 + x];
+                for (int j = 0; j < k; j++) {
+                    u32 *d = px + (size_t)(y * k + j) * OW + (size_t)x * k;
+                    const u32 *s = out + (size_t)((y - WIN_Y0) * k + j) * OW + (size_t)x * k;
+                    for (int i = 0; i < k; i++) d[i] = s[i];
+                }
             }
         }
     }
-    draw_cracks(px);
-    draw_timer(px);
+    draw_cracks(px, k);
+    draw_timer(px, k);
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -1096,14 +1223,16 @@ void enh_life_reset(void)
 
 void enh_frame(void)
 {
+    if (!ensure_buffers()) return;
     update_view();
     walk_road();
-    clear_frame();
-    draw_road();
-    draw_background();
+    prepare_road();
+    prepare_background();
     collect_objects();
-    draw_objects();
-    downsample();
+    sort_objects();
+    plan_bands();
+    host_parallel_for(nbands, render_band, NULL);
+    host_parallel_for(nbands, sharpen_band, NULL);
     update_cover();
     active = true;
     dirty = true;

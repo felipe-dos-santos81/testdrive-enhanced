@@ -13,9 +13,9 @@ void host_shutdown(void);
  * The timer/sound module installs the base ISR body; driving mode chains the simulation ISR. */
 void host_set_tick_handler(void (*handler)(void));
 
-/* Source of the displayed image: fills a 320x200 XRGB8888 frame and returns true if it changed
- * since the last call. Installed by the graphics module. */
-void host_set_frame_source(bool (*compose)(u32 *xrgb320x200));
+/* Source of the displayed image: fills a w x h XRGB8888 frame (320x200 times an integer scale) and returns
+ * true if it changed since the last call. Installed by the graphics module. */
+void host_set_frame_source(bool (*compose)(u32 *xrgb), int w, int h);
 
 /* Runs due timer ticks, generates speaker audio, handles window events and presents the screen when
  * it changed. Every busy-wait loop of the original (key polls, deadlines, delays) must call this.
@@ -29,8 +29,12 @@ void host_set_frame_rate(int fps);
 int  host_frame_rate(void);
 void host_frame_begin(void);
 
-/* Monotonic host clock in nanoseconds (enhanced mode animation timing). */
+/* Monotonic host clock in nanoseconds (enhanced renderer animation timing). */
 uint64_t host_time_ns(void);
+
+/* Runs fn(i, ctx) for i = 0..n-1 on a worker pool (the calling thread takes part) and returns when all
+ * are done. fn must only touch data that no other index touches. */
+void host_parallel_for(int n, void (*fn)(int i, void *ctx), void *ctx);
 
 /* Presents immediately if the frame source reports a change (used by unpaced effects that the
  * original drew at CPU speed). Blocks on VSync. */

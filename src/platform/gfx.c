@@ -18,6 +18,7 @@
 #include "../host.h"
 #include "../symbols.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -129,6 +130,11 @@ static inline u16 row_at(u16 y) { return CSW((u16)(y * 2 + CUR_ROWTAB)); }
 /* ------------------------------------------------------------------------------------------------ */
 /* Port setup / presentation                                                                         */
 
+static int out_scale = 1;                  /* ENH: displayed frame = 320x200 times this */
+
+void gfx_set_output_scale(int k) { out_scale = k < 1 ? 1 : k > 8 ? 8 : k; }
+int  gfx_output_scale(void) { return out_scale; }
+
 void gfx_init(void)
 {
     memset(ega.plane, 0, sizeof ega.plane);
@@ -139,7 +145,7 @@ void gfx_init(void)
     ega.dirty = true;
     /* CS:528E = 5290, CS:5A60 = far CS:5A7C, CS:5A64 = screen copy, CS:5A7C screen descriptor and the
      * CS:5A94 row table are statically initialised in the image (5A62 is relocated); nothing to do. */
-    host_set_frame_source(gfx_compose);
+    host_set_frame_source(gfx_compose, 320 * out_scale, 200 * out_scale);
 }
 
 static u32 ega_rgb(u8 v)
@@ -154,11 +160,11 @@ static u32 ega_rgb(u8 v)
 u32 gfx_palette_rgb(u8 idx) { return ega_rgb(ega.palette[idx & 0x0F]); }
 const u8 *gfx_ega_plane(int k) { return ega.plane[k & 3]; }
 
-/* PORT: optional host-side overlay (enhanced renderer); not part of the original. */
+/* ENH: host-side overlay (enhanced renderer); not part of the original. */
 static bool (*overlay_dirty)(void);
-static void (*overlay_draw)(u32 *xrgb);
+static void (*overlay_draw)(u32 *xrgb, int scale);
 
-void gfx_set_overlay(bool (*dirty)(void), void (*draw)(u32 *xrgb))
+void gfx_set_overlay(bool (*dirty)(void), void (*draw)(u32 *xrgb, int scale))
 {
     overlay_dirty = dirty;
     overlay_draw = draw;
@@ -168,6 +174,16 @@ void gfx_set_overlay(bool (*dirty)(void), void (*draw)(u32 *xrgb))
 bool gfx_compose(u32 *xrgb)
 {
     static u32 base[320 * 200];
+    static u32 *big;                        /* base scaled up to the output size */
+    static int big_scale;
+    int k = out_scale, ow = 320 * k;
+    if (big_scale != k) {
+        free(big);
+        big = k > 1 ? malloc((size_t)ow * (size_t)(200 * k) * sizeof *big) : NULL;
+        big_scale = big || k == 1 ? k : 0;
+        if (!big_scale) return false;
+        ega.dirty = true;
+    }
     bool base_changed = ega.dirty;
     bool ov_changed = overlay_dirty && overlay_dirty();
     if (!base_changed && !ov_changed) return false;
@@ -186,9 +202,18 @@ bool gfx_compose(u32 *xrgb)
                 }
             }
         }
+        if (k > 1) {
+            for (int y = 0; y < 200; y++) {
+                u32 *row = big + (size_t)y * k * ow;
+                for (int x = 0; x < 320; x++)
+                    for (int i = 0; i < k; i++) row[x * k + i] = base[y * 320 + x];
+                for (int j = 1; j < k; j++) memcpy(row + (size_t)j * ow, row, (size_t)ow * sizeof *row);
+            }
+        }
     }
-    memcpy(xrgb, base, sizeof base);
-    if (overlay_draw) overlay_draw(xrgb);
+    if (k > 1) memcpy(xrgb, big, (size_t)ow * (size_t)(200 * k) * sizeof *big);
+    else memcpy(xrgb, base, sizeof base);
+    if (overlay_draw) overlay_draw(xrgb, k);
     return true;
 }
 

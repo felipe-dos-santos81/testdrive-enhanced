@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SCREEN_W 320
-#define SCREEN_H 200
 #define AUDIO_RATE 44100
 #define AUDIO_AMPLITUDE 5000
 
@@ -20,7 +18,8 @@ static char *game_dir;
 
 static void (*tick_handler)(void);
 static bool (*frame_source)(u32 *);
-static u32 frame[SCREEN_W * SCREEN_H];
+static u32 *frame;
+static int frame_w, frame_h;
 
 /* Tick clock: tick n is due at start + n * 11927 / 1193182 s (exact rational arithmetic). */
 static Uint64 clock_start_ns;
@@ -38,6 +37,7 @@ static double spk_phase;
 static double samples_per_tick_frac;
 
 static void process_events(void);
+static void pool_shutdown(void);
 
 bool host_init(const char *dir, int window_scale)
 {
@@ -53,10 +53,7 @@ bool host_init(const char *dir, int window_scale)
         return false;
     }
     SDL_SetRenderVSync(renderer, 1);
-    /* 320x200 shown with 4:3 aspect, as on a 200-line EGA monitor. */
-    SDL_SetRenderLogicalPresentation(renderer, 320, 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_W, SCREEN_H);
-    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    /* The frame texture is created by host_set_frame_source() once its size is known. */
 
     SDL_AudioSpec spec = { SDL_AUDIO_S16, 1, AUDIO_RATE };
     audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
@@ -75,9 +72,11 @@ bool host_init(const char *dir, int window_scale)
 
 void host_shutdown(void)
 {
+    pool_shutdown();
     if (gamepad) SDL_CloseGamepad(gamepad);
     if (audio) SDL_DestroyAudioStream(audio);
     if (texture) SDL_DestroyTexture(texture);
+    SDL_free(frame);
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     SDL_free(game_dir);
@@ -85,7 +84,20 @@ void host_shutdown(void)
 }
 
 void host_set_tick_handler(void (*handler)(void)) { tick_handler = handler; }
-void host_set_frame_source(bool (*compose)(u32 *)) { frame_source = compose; }
+void host_set_frame_source(bool (*compose)(u32 *), int w, int h)
+{
+    frame_source = compose;
+    if (w == frame_w && h == frame_h) return;
+    SDL_free(frame);
+    frame = SDL_calloc((size_t)w * (size_t)h, sizeof *frame);
+    frame_w = w;
+    frame_h = h;
+    if (texture) SDL_DestroyTexture(texture);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+    /* 320x200 (times the output scale) shown with 4:3 aspect, as on a 200-line EGA monitor. */
+    SDL_SetRenderLogicalPresentation(renderer, w, h * 6 / 5, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_SetTextureScaleMode(texture, w > 320 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+}
 
 static Uint64 tick_due_ns(Uint64 n)
 {
@@ -118,10 +130,11 @@ static void audio_for_one_tick(void)
 
 static void present(void)
 {
-    SDL_UpdateTexture(texture, NULL, frame, SCREEN_W * 4);
+    if (!texture) return;
+    SDL_UpdateTexture(texture, NULL, frame, frame_w * 4);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    SDL_FRect dst = { 0, 0, 320, 240 };
+    SDL_FRect dst = { 0, 0, (float)frame_w, (float)(frame_h * 6 / 5) };
     SDL_RenderTexture(renderer, texture, NULL, &dst);
     SDL_RenderPresent(renderer);
 }
@@ -172,6 +185,78 @@ static int frame_rate = 8;          /* ~1987 PC AT + EGA */
 static Uint64 next_frame_ns;
 
 uint64_t host_time_ns(void) { return SDL_GetTicksNS(); }
+
+/* ---------------------------------------------------------------- worker pool */
+
+#define POOL_MAX 15
+static SDL_Thread *pool_threads[POOL_MAX];
+static int pool_size = -1;                          /* -1 = not started */
+static SDL_Semaphore *pool_wake, *pool_done;
+static SDL_AtomicInt pool_next;
+static int pool_count;
+static void (*pool_fn)(int, void *);
+static void *pool_ctx;
+static bool pool_quit;
+
+static void pool_run(void)
+{
+    for (;;) {
+        int i = SDL_AddAtomicInt(&pool_next, 1);     /* returns the previous value */
+        if (i >= pool_count) return;
+        pool_fn(i, pool_ctx);
+    }
+}
+
+static int pool_worker(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        SDL_WaitSemaphore(pool_wake);
+        if (pool_quit) return 0;
+        pool_run();
+        SDL_SignalSemaphore(pool_done);
+    }
+}
+
+static void pool_start(void)
+{
+    int n = SDL_GetNumLogicalCPUCores() - 1;
+    if (n > POOL_MAX) n = POOL_MAX;
+    pool_size = 0;
+    if (n <= 0) return;
+    pool_wake = SDL_CreateSemaphore(0);
+    pool_done = SDL_CreateSemaphore(0);
+    if (!pool_wake || !pool_done) return;
+    for (int i = 0; i < n; i++) {
+        pool_threads[i] = SDL_CreateThread(pool_worker, "pool", NULL);
+        if (!pool_threads[i]) break;
+        pool_size++;
+    }
+}
+
+static void pool_shutdown(void)
+{
+    if (pool_size <= 0) return;
+    pool_quit = true;
+    for (int i = 0; i < pool_size; i++) SDL_SignalSemaphore(pool_wake);
+    for (int i = 0; i < pool_size; i++) SDL_WaitThread(pool_threads[i], NULL);
+    SDL_DestroySemaphore(pool_wake);
+    SDL_DestroySemaphore(pool_done);
+    pool_size = 0;
+}
+
+void host_parallel_for(int n, void (*fn)(int i, void *ctx), void *ctx)
+{
+    if (pool_size < 0) pool_start();
+    pool_fn = fn;
+    pool_ctx = ctx;
+    pool_count = n;
+    SDL_SetAtomicInt(&pool_next, 0);
+    int helpers = pool_size < n - 1 ? pool_size : n - 1;
+    for (int i = 0; i < helpers; i++) SDL_SignalSemaphore(pool_wake);
+    pool_run();
+    for (int i = 0; i < helpers; i++) SDL_WaitSemaphore(pool_done);
+}
 
 void host_set_frame_rate(int fps) { frame_rate = fps < 0 ? 0 : fps; }
 int  host_frame_rate(void) { return frame_rate; }

@@ -28,11 +28,14 @@ void gfx_init(void);
  * changed since the last call. Installed with host_set_frame_source(). */
 bool gfx_compose(u32 *xrgb);
 
-/* PORT (enhanced mode only): RGB of palette entry idx, and an overlay drawn over the composed frame.
- * dirty() reports overlay changes that need a new frame even when VRAM did not change. */
+/* ENH (enhanced renderer): output scale of the displayed frame (set before gfx_init), RGB of palette entry
+ * idx, and an overlay drawn over the composed frame at that scale. dirty() reports overlay changes that
+ * need a new frame even when VRAM did not change. */
+void gfx_set_output_scale(int k);  /* 1..8, frame = 320k x 200k; the EGA image is scaled up by k */
+int  gfx_output_scale(void);
 u32  gfx_palette_rgb(u8 idx);
 const u8 *gfx_ega_plane(int k);   /* read-only view of EGA plane k (40 bytes per row) */
-void gfx_set_overlay(bool (*dirty)(void), void (*draw)(u32 *xrgb));
+void gfx_set_overlay(bool (*dirty)(void), void (*draw)(u32 *xrgb, int scale));
 
 /* ---- primitives */
 void gfx_fill_rect(s16 x, s16 y, s16 w, s16 h, u8 colour);              /* 0x4941 */

@@ -1,6 +1,7 @@
 /* Test Drive Enhanced — entry point.
  *
- * usage: testdrive-enhanced [--game-dir DIR] [--scale N] [--frame-rate FPS] [--bios-keys] [--check]
+ * usage: testdrive-enhanced [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS] [--bios-keys] [--check]
+ *   --res-scale  output resolution as a multiple of 320x200 (default 4, 1..8)
  *   --frame-rate drawing rate while driving (default 60; 0 = as fast as possible)
  *   --bios-keys driving keys act only through key repeat, exactly like the original (default: held keys)
  *   --game-dir  folder with the original game files (default: "Game" next to the working directory)
@@ -17,22 +18,24 @@
 #include "host.h"
 #include "mem.h"
 #include "enhanced/enhanced.h"
+#include "platform/gfx.h"
 
 int game_main(void);   /* game/flow.c: port of main() at image 0x0010 */
 
 int main(int argc, char **argv)
 {
     const char *dir = "Game";
-    int scale = 3;
+    int scale = 3, res_scale = 4;
     bool check = false, rate_set = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--game-dir") && i + 1 < argc) dir = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--res-scale") && i + 1 < argc) res_scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--check")) check = true;
         else if (!strcmp(argv[i], "--bios-keys")) host_set_held_keys(false);
         else if (!strcmp(argv[i], "--frame-rate") && i + 1 < argc) { host_set_frame_rate(atoi(argv[++i])); rate_set = true; }
         else {
-            fprintf(stderr, "usage: %s [--game-dir DIR] [--scale N] [--frame-rate FPS] [--bios-keys] [--check]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--game-dir DIR] [--scale N] [--res-scale N] [--frame-rate FPS] [--bios-keys] [--check]\n", argv[0]);
             return 2;
         }
     }
@@ -51,6 +54,7 @@ int main(int argc, char **argv)
     }
 
     if (!host_init(dir, scale)) return 1;
+    gfx_set_output_scale(res_scale);
     enh_init();
     if (!rate_set) host_set_frame_rate(60);
     int rc = game_main();
