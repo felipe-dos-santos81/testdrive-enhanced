@@ -69,6 +69,10 @@ static uint64_t mouse_off_ns;
 static s16 mouse_gear_dir;
 static u8 mouse_gear_polls;
 
+/* PORT: on-screen keyboard owns clicks while set; getkey()/mouse_menu() leave them queued for
+ * text_input_line instead of converting them into Enter/Esc. */
+static bool mouse_ui_capture;
+
 static MouseState mouse_poll(void)
 {
     s16 dx; u8 held; s16 wheel;
@@ -103,7 +107,7 @@ static void mouse_meta(bool menus, u16 *pending)
                 DSB(DS_snd_flags) |= 4;
                 if (DSB(DS_snd_flags) & 2) DSB(DS_snd_playing) |= 2;
             }
-        } else if (menus && pending && *pending == 0) {
+        } else if (menus && !mouse_ui_capture && pending && *pending == 0) {
             if (btn & 0x01) *pending = 0x000D;              /* left: Enter */
             else if (btn & 0x02) *pending = 0x001B;         /* right: Esc */
         }
@@ -198,6 +202,7 @@ static u16 getkey_kbd_joy_edge(u16 *dx)
  * moves the selection through the same table the joystick edge path uses, deduped the same way. */
 static u16 mouse_menu(void)
 {
+    if (mouse_ui_capture) return 0;                         /* PORT: on-screen keyboard owns clicks */
     u16 pending = 0;
     mouse_meta(true, &pending);
     if (pending != 0) return pending;
@@ -437,61 +442,125 @@ int toupper_c(int c)
     return ch;
 }
 
-/* 0x92A8 text_input_line — high-score name editor */
+/* 0x92A8 text_input_line — high-score name editor, PORT: mouse-capable on-screen keyboard. The
+ * original's key semantics are kept (Right/Left/Ins/Del/Backspace/letters/Enter and the idle
+ * timeout); a clickable grid is added. Right click clears and commits (an empty name is not
+ * recorded, see scores_enter_name). */
+enum { OSK_COLS = 7, OSK_ROWS = 5, OSK_CELLS = 31,
+       OSK_X0 = 20, OSK_Y0 = 60, OSK_CW = 40, OSK_CH = 24 };
+
+static const char *osk_label(int i)
+{
+    static const char *labels[OSK_CELLS] = {
+        "A","B","C","D","E","F","G",   "H","I","J","K","L","M","N",
+        "O","P","Q","R","S","T","U",   "V","W","X","Y","Z","SPC","<",
+        ">","DEL","OK"
+    };
+    return i >= 0 && i < OSK_CELLS ? labels[i] : "";
+}
+
+static int osk_hit(s16 ex, s16 ey)
+{
+    if (ex < OSK_X0 || ey < OSK_Y0) return -1;
+    int col = (ex - OSK_X0) / OSK_CW;
+    int row = (ey - OSK_Y0) / OSK_CH;
+    if (col < 0 || col >= OSK_COLS || row < 0 || row >= OSK_ROWS) return -1;
+    int i = row * OSK_COLS + col;
+    return i < OSK_CELLS ? i : -1;
+}
+
+static void osk_draw(const char *name, int hover)
+{
+    gfx_set_text_colours(0x0F, 0);
+    draw_text_centered("ENTER YOUR NAME", 8);
+    draw_rect_outline(0x50, 0x1C, 0xF0, 0x2C, 0x0F);
+    gfx_draw_text(name, 0x58, 0x1E);
+    for (int i = 0; i < OSK_CELLS; i++) {
+        s16 cx = (s16)(OSK_X0 + (i % OSK_COLS) * OSK_CW);
+        s16 cy = (s16)(OSK_Y0 + (i / OSK_COLS) * OSK_CH);
+        if (i == hover) gfx_fill_rect((s16)(cx + 1), (s16)(cy + 1), OSK_CW - 2, OSK_CH - 2, 0x08);
+        draw_rect_outline(cx, cy, (s16)(cx + OSK_CW - 2), (s16)(cy + OSK_CH - 2), 0x07);
+        gfx_set_text_colours(0x0F, 0);
+        gfx_draw_text(osk_label(i), (s16)(cx + 4), (s16)(cy + 8));
+    }
+}
+
 int text_input_line(char *buf, int maxlen, s16 x, s16 y, u16 timeout)
 {
+    (void)x; (void)y;                                     /* the grid replaces the original layout */
     s16 len = (s16)maxlen;
     s16 i;
     for (i = 0; i < len; i++) buf[i] = ' ';
     buf[len] = 0;
-    gfx_draw_text(buf, x, y);
 
     s16 pos = 0;
-    s16 cur_h = 2;                              /* cursor glyph index: 2 overwrite, 8 insert */
-    s16 insert = 0;
-    draw_glyph(x, y, 2);
+    mouse_ui_capture = true;                              /* PORT: grid owns the queued clicks */
+    gfx_clear_screen(0);
+    osk_draw(buf, -1);
     set_deadline(timeout);
 
     for (;;) {
-        int key = menu_key();
-        if (key == -1) break;                   /* timeout */
-        if (key == 0x0D) break;                 /* Enter */
-        set_deadline(timeout);                  /* idle timeout restarts after every other key */
-
-        if (key == 0x4D00) {                    /* Right */
-            draw_glyph((s16)(x + (pos << 3)), y, cur_h);
-            if (len - 1 > pos) pos++;
-        } else if (key == 0x4B00) {             /* Left */
-            draw_glyph((s16)(x + (pos << 3)), y, cur_h);
-            if (pos != 0) pos--;
-        } else if (key == 0x5200) {             /* Ins */
-            draw_glyph((s16)(x + (pos << 3)), y, cur_h);
-            if (insert == 0) { insert = 1; cur_h = 8; }
-            else             { insert = 0; cur_h = 2; }
-        } else if (key == 0x5300) {             /* Del */
-            for (i = pos; len - 1 > i; i++) buf[i] = buf[i + 1];
-            buf[len - 1] = ' ';
-            gfx_draw_text(buf, x, y);
-        } else if (key == 0x08) {               /* Backspace */
-            if (pos == 0) continue;             /* no redraw */
-            pos--;
-            buf[pos] = ' ';
-            gfx_draw_text(buf, x, y);
-        } else if (key >= 0x20 && key <= 0x7A) {
-            if (insert) {
-                /* Faithful quirk: the loop stops at i > pos, so buf[pos+1] keeps its old value and the
-                 * old buf[pos] is overwritten instead of shifted. */
-                for (i = (s16)(len - 2); i > pos; i--) buf[i + 1] = buf[i];
+        bool acted = false;
+        u16 key = getkey();
+        if (key != 0) {
+            acted = true;
+            if (key == 0x0D) break;                        /* Enter */
+            set_deadline(timeout);                         /* idle timeout restarts after a key */
+            if (key == 0x4D00) {                           /* Right */
+                if (len - 1 > pos) pos++;
+            } else if (key == 0x4B00) {                    /* Left */
+                if (pos != 0) pos--;
+            } else if (key == 0x08) {                      /* Backspace */
+                if (pos != 0) { pos--; buf[pos] = ' '; }
+            } else if (key == 0x5300) {                    /* Del */
+                for (i = pos; len - 1 > i; i++) buf[i] = buf[i + 1];
+                buf[len - 1] = ' ';
+            } else if (key >= 0x20 && key <= 0x7A) {
+                buf[pos] = (char)key;
+                if (len - 1 > pos) pos++;
+            } else {
+                acted = false;                             /* nothing changed */
             }
-            buf[pos] = (char)key;
-            if (len - 1 > pos) pos++;
-            gfx_draw_text(buf, x, y);
         } else {
-            continue;                           /* other keys (incl. Esc = 1): no redraw */
+            s16 ex, ey;
+            u8 btn;
+            while (host_mouse_click(&ex, &ey, &btn)) {
+                acted = true;
+                if (btn & 0x02) { buf[0] = 0; goto done; } /* right click: clear and commit */
+                int cell = osk_hit(ex, ey);
+                if (cell >= 0) {
+                    set_deadline(timeout);
+                    if (cell < 26) {                       /* letter */
+                        buf[pos] = (char)('A' + cell);
+                        if (len - 1 > pos) pos++;
+                    } else if (cell == 26) {               /* SPACE */
+                        buf[pos] = ' ';
+                        if (len - 1 > pos) pos++;
+                    } else if (cell == 27) {               /* < */
+                        if (pos != 0) pos--;
+                    } else if (cell == 28) {               /* > */
+                        if (len - 1 > pos) pos++;
+                    } else if (cell == 29) {               /* DEL */
+                        if (pos != 0) { pos--; buf[pos] = ' '; }
+                    } else {                               /* OK */
+                        goto done;
+                    }
+                }
+            }
         }
-        draw_glyph((s16)(x + (pos << 3)), y, cur_h);
+        if (!acted) {
+            if (ticks_elapsed(DSW(DS_deadline_start)) >= DSW(DS_deadline_len)) break;
+            host_pump();
+            continue;
+        }
+        gfx_clear_screen(0);
+        s16 hx, hy;
+        osk_draw(buf, host_mouse_pos(&hx, &hy) ? osk_hit(hx, hy) : -1);
+        host_present_now();
     }
-    draw_glyph((s16)(x + (pos << 3)), y, cur_h);  /* remove the cursor */
-    /* TODO(verify): the original returns whatever AX draw_glyph left; the only caller (0x1482) ignores it. */
+done:
+    mouse_ui_capture = false;                             /* PORT: release the click queue */
+    buf[len] = 0;
+    /* TODO(verify): the original returns whatever AX draw_glyph left; the only caller ignores it. */
     return 0;
 }
