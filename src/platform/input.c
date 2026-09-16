@@ -101,21 +101,6 @@ static MouseState mouse_poll(void)
     return s;
 }
 
-/* PORT: menus with the left button — a left click becomes the pending Enter, a right click the
- * pending Esc. The middle-click pause and X1 sound bindings are gone: pause is a road double click
- * and sound a tap on the ♪ cell, both handled by mouse_gestures while driving. */
-static void mouse_meta(bool menus, u16 *pending)
-{
-    s16 ex, ey;
-    u8 btn;
-    while (host_mouse_click(&ex, &ey, &btn, NULL)) {
-        if (menus && !mouse_ui_capture && pending && *pending == 0) {
-            if (btn & 0x01) *pending = 0x000D;              /* left: Enter */
-            else if (btn & 0x02) *pending = 0x001B;         /* right: Esc */
-        }
-    }
-}
-
 static void mouse_sound_toggle(void)
 {
     if (DSB(DS_snd_flags) & 4) {
@@ -273,16 +258,38 @@ static u16 getkey_kbd_joy_edge(u16 *dx)
     return r;
 }
 
-/* PORT: mouse menu action — left click Enter, right click Esc, a vertical flick past the steer
- * threshold moves the selection through the same table the joystick edge path uses (the menus only
- * take Up/Down), deduped the same way. */
+/* PORT: menus with the left button only — a click elsewhere is Enter, the BACK cell is Esc and the
+ * SND cell toggles sound. The right-click binding is gone. The cells are redrawn idempotently each
+ * poll (menu screens are static, so the same bytes are rewritten). */
+static void mouse_menu_cells(void)
+{
+    s16 ex, ey;
+    int hover = host_mouse_pos(&ex, &ey) ? menu_cell_at(ex, ey) : MENU_CELL_NONE;
+    gfx_set_text_colours(0x0F, 0);
+    draw_rect_outline(232, 172, 284, 190, 0x0F);
+    draw_rect_outline(290, 172, 312, 190, 0x0F);
+    if (hover == MENU_CELL_BACK)  gfx_fill_rect(233, 173, 50, 16, 0x08);
+    if (hover == MENU_CELL_SOUND) gfx_fill_rect(291, 173, 20, 16, 0x08);
+    gfx_draw_text("BACK", 244, 178);
+    gfx_draw_text("SND", 295, 178);
+}
+
 static u16 mouse_menu(void)
 {
     if (mouse_ui_capture) return 0;                         /* PORT: on-screen keyboard owns clicks */
-    u16 pending = 0;
-    mouse_meta(true, &pending);
-    if (pending != 0) return pending;
-    MouseState s = mouse_poll();
+    mouse_menu_cells();
+    s16 ex, ey;
+    u8 btn;
+    uint64_t ns;
+    while (host_mouse_click(&ex, &ey, &btn, &ns)) {
+        if (btn != 0x01) continue;                       /* left button only */
+        switch (menu_cell_at(ex, ey)) {
+        case MENU_CELL_SOUND: mouse_sound_toggle(); break;
+        case MENU_CELL_BACK:  return 0x001B;             /* Esc */
+        default:              return 0x000D;             /* Enter */
+        }
+    }
+    MouseState s = mouse_poll();                         /* one poll per call: it consumes the deltas */
     u16 dir = mouse_direction(0, s.off_y <= -MOUSE_OFF_THRESH, s.off_y >= MOUSE_OFF_THRESH);
     u16 r = DSW((u16)(DS_joy_menu_scan + (u16)mouse_joy_nibble(dir) * 2));
     if (r == DSW(DS_joy_menu_last)) return 0;
