@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.01
+## v1.0.1
 
 - Smoother horizon: the valley floor and the foot of the mountains now meet at the same haze level, so the
   bright mist band between them is gone. The mist builds up gradually towards the horizon and thins out
