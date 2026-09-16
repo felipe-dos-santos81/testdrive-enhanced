@@ -1210,7 +1210,8 @@ static void out_rect(u32 *px, int k, int ex0, int ey0, int ex1, int ey1, u32 edg
 }
 
 /* PORT: triangle helper for the on-screen steer cells. */
-/* Filled triangle: dir +1 points left, -1 points right. */
+/* Filled triangle with its tip at (cx, cy) and its base len pixels behind it: dir +1 points right,
+ * -1 points left (the base moves to cx - dir * len). */
 static void out_arrow(u32 *px, int k, int cx, int cy, int len, int dir, u32 c)
 {
     int ow = 320 * k;
@@ -1247,8 +1248,8 @@ static void draw_steer_buttons(u32 *px, int k)
         int st = strip_cell_state(cell, hover, held);      /* idle dark grey, hover blue, pressed light blue */
         u32 fill = gfx_palette_rgb(st == STRIP_PRESSED ? 9 : st == STRIP_HOVER ? 1 : 8);
         out_rect(px, k, x0, STRIP_Y0, x1, STRIP_Y1, edge, fill);
-        if (cell == CELL_STEER_L) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4,  1, edge);
-        if (cell == CELL_STEER_R) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4, -1, edge);
+        if (cell == CELL_STEER_L) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4, -1, edge);
+        if (cell == CELL_STEER_R) out_arrow(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 4,  1, edge);
         if (cell == CELL_GEAR_UP)   out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3, -1, edge);
         if (cell == CELL_GEAR_DOWN) out_arrow_v(px, k, (x0 + x1) / 2, (STRIP_Y0 + STRIP_Y1) / 2, 3,  1, edge);
         if (cell == CELL_BRAKE)     draw_letters(px, k, "BRAKE", x0 + 6, STRIP_Y0 + 3, edge);
